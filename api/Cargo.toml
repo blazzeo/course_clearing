@@ -1,0 +1,25 @@
+[package]
+name = "clearing-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+actix-cors = "0.6"
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono"] }
+solana-client = "3.1"
+solana-sdk = "3"
+bs58 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+dotenv = "0.15"
+env_logger = "0.11"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+
+
+
+
