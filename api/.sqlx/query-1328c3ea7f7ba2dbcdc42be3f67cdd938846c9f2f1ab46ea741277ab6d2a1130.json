@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) as count FROM positions WHERE (creator_address = $1 OR counterparty_address = $1) AND status IN ('pending', 'confirmed')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1328c3ea7f7ba2dbcdc42be3f67cdd938846c9f2f1ab46ea741277ab6d2a1130"
+}

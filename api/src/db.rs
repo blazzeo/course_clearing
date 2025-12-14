@@ -1,89 +1,71 @@
-use sqlx::{PgPool, Pool, Postgres};
+use crate::models::Position;
+use sqlx::{
+    migrate::{MigrateError, Migrator},
+    PgPool, Pool, Postgres,
+};
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    // Пытаемся подключиться по DATABASE_URL
     PgPool::connect(database_url).await
 }
 
 pub async fn run_migrations(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
-    init_schema(pool).await
+    match MIGRATOR.run(pool).await {
+        Ok(()) => {
+            println!("Migrations successfully applied.");
+            Ok(())
+        }
+        Err(MigrateError::VersionMismatch(version)) => {
+            println!("Migration version mismatch: {version:?}, but continuing.");
+            Ok(())
+        }
+        Err(MigrateError::Dirty(_)) => {
+            eprintln!("Database is in a dirty migration state.");
+            Err(MigrateError::Dirty(-1).into())
+        }
+        Err(e) => {
+            eprintln!("Migration error: {e}");
+            Err(e.into())
+        }
+    }
 }
 
-// Создаем миграции вручную, так как нет папки migrations
-pub async fn init_schema(pool: &Pool<Postgres>) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS participants (
-            id BIGSERIAL PRIMARY KEY,
-            address VARCHAR(44) UNIQUE NOT NULL,
-            balance BIGINT NOT NULL DEFAULT 0,
-            margin BIGINT NOT NULL DEFAULT 0,
-            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
+pub async fn create_main_admin(
+    pool: &Pool<Postgres>,
+    admin_pubkey: String,
+) -> Result<(), sqlx::Error> {
+    // Проверяем, есть ли уже такой пользователь
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM participants WHERE address = $1)")
+            .bind(&admin_pubkey)
+            .fetch_one(pool)
+            .await?;
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS positions (
-            id BIGSERIAL PRIMARY KEY,
-            creator_address VARCHAR(44) NOT NULL,
-            counterparty_address VARCHAR(44) NOT NULL,
-            amount BIGINT NOT NULL,
-            status VARCHAR(20) NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            confirmed_at TIMESTAMP WITH TIME ZONE,
-            cleared_at TIMESTAMP WITH TIME ZONE,
-            transaction_signature VARCHAR(88)
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
+    if exists {
+        return Ok(()); // Просто выходим, не добавляя
+    }
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS clearing_history (
-            id BIGSERIAL PRIMARY KEY,
-            clearing_id VARCHAR(255),
-            participants TEXT[] NOT NULL,
-            amounts BIGINT[] NOT NULL,
-            net_amounts BIGINT[] NOT NULL,
-            status VARCHAR(20) NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            executed_at TIMESTAMP WITH TIME ZONE
-        )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_positions_creator ON positions(creator_address);
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_positions_counterparty ON positions(counterparty_address);
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
-        "#,
-    )
-    .execute(pool)
-    .await?;
+    // Добавляем, если нет
+    sqlx::query("INSERT INTO participants (address, user_type) VALUES ($1, 'administrator')")
+        .bind(admin_pubkey)
+        .execute(pool)
+        .await?;
 
     Ok(())
+}
+
+pub async fn collect_confirmed_positions(
+    pool: &Pool<Postgres>,
+) -> Result<Vec<Position>, sqlx::Error> {
+    let res: Vec<Position> = sqlx::query_as(
+        r#"
+        SELECT * FROM positions
+        WHERE status = 'confirmed'
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(res)
 }

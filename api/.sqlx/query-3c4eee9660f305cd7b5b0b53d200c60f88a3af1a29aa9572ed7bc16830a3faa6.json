@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO netting_results (session_id, participant_address, net_amount)\n             VALUES ($1,$2,$3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c4eee9660f305cd7b5b0b53d200c60f88a3af1a29aa9572ed7bc16830a3faa6"
+}

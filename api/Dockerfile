@@ -38,3 +38,5 @@ RUN ls -la /app
 EXPOSE 8080
 
 CMD ["./clearing-api"]
+
+

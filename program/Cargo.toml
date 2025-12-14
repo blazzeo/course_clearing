@@ -1,24 +1,8 @@
-[package]
-name = "clearing-service"
-version = "0.1.0"
-description = "Decentralized clearing service on Solana"
-edition = "2021"
+[workspace]
+members = ["programs/clearing-service"]
+resolver = "2"
 
-[lib]
-crate-type = ["cdylib", "lib"]
-name = "clearing_service"
-
-[features]
-no-entrypoint = []
-no-idl = []
-no-log-ix-name = []
-cpi = ["no-entrypoint"]
-default = []
-
-[dependencies]
-anchor-lang = "0.29.0"
-anchor-spl = "0.29.0"
-
-
+[profile.release]
+overflow-checks = true
 
 

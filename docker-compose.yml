@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:16-bookworm
     restart: always
-    container_name: clearing-postgres
+    container_name: postgres
     environment:
       POSTGRES_USER: clearing_user
       POSTGRES_PASSWORD: clearing_pass
@@ -17,50 +17,62 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    profiles:
+      - all
+      - db
 
   api:
     image: clearing-api
     build:
       context: ./api
       dockerfile: Dockerfile
-    container_name: clearing-api
+    container_name: api
     environment:
-      DATABASE_URL: postgres://clearing_user:clearing_pass@postgres:5432/clearing_db
+      DATABASE_URL: postgres://clearing_user:clearing_pass@api:5432/clearing_db
       SOLANA_RPC_URL: https://api.devnet.solana.com
-      RUST_LOG: debug
-      PORT: 8080
+      RUST_LOG: info
+      PORT: 8001
     ports:
-      - "8080:8080"
+      - "8001:8001"
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: clearing-frontend
-    environment:
-      VITE_API_URL: http://localhost/api
-    ports:
-      - "3000:3000"
-    depends_on:
+    profiles:
+      - all
       - api
-    restart: unless-stopped
 
-  nginx:
-    image: nginx:alpine
-    container_name: clearing-nginx
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # - ./frontend/dist:/usr/share/nginx/html:ro
-    depends_on:
-      - frontend
-      - api
-    restart: unless-stopped
+  # nginx:
+  #   image: nginx:alpine
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: gateway
+  #   environment:
+  #       VITE_API_URL: http://localhost:8001/api
+  #       VITE_SOLANA_RPC_URL: https://api.devnet.solana.com
+  #   ports:
+  #     - "8000:80"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     # - /dev/null:/etc/nginx/conf.d/default.conf
+  #   depends_on:
+  #     - api
+  #   restart: unless-stopped
+
+  # solana:
+  #   build:
+  #     context: ./program
+  #     dockerfile: Dockerfile
+  #   container_name: solana-anchor
+  #   volumes:
+  #     - ./program:/app
+  #     - solana-data:/root/.config/solana
+  #   # environment:
+  #   #   - ANCHOR_WALLET=/root/.config/solana/devnet.json
+  #   entrypoint: /bin/bash
+  #   tty: true
 
 volumes:
   postgres_data:
+  # solana-data:

@@ -1,4 +1,4 @@
-FROM node:20-bullseye as builder
+FROM node:20-bullseye AS builder
 
 WORKDIR /app
 
@@ -7,15 +7,11 @@ RUN npm config set registry https://registry.npmmirror.com
 RUN npm install
 
 COPY . .
-
 RUN npm run build
 
 FROM nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 3000
 
 CMD ["nginx", "-g", "daemon off;"]
 

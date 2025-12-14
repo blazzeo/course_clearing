@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE positions SET status='cleared', cleared_at=now() WHERE status='confirmed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "fe4e7a54344c9d98ae9f29c625a0a8fbbb5f967acc7394cdd42e31745e7734a8"
+}

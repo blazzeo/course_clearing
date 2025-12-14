@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO settlements (session_id, from_address, to_address, amount, tx_signature)\n             VALUES ($1, $2, $3, $4, '') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9af62869e8276e8db3194af16533bcd0887b7a3e917d67a45c6a70e7f7933a11"
+}
