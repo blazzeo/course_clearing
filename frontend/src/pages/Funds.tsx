@@ -92,20 +92,42 @@ export default function Funds() {
 				data: new Uint8Array(instructionData.data) as Buffer,
 			});
 
-			const connection = new Connection(RPC_URL);
+			//	 TEST
+			const connection = new Connection(RPC_URL, "confirmed");
+
+			const tx = new Transaction().add(ix);
+			tx.feePayer = publicKey;
 
 			const { blockhash } = await connection.getLatestBlockhash();
-
-			const tx = new Transaction();
-
-			tx.feePayer = publicKey;
 			tx.recentBlockhash = blockhash;
 
-			tx.add(ix);
+			// ⬇️ ВАЖНО
+			const sim = await connection.simulateTransaction(tx);
 
-			const sig = await sendTransaction(tx, connection);
+			console.log("Simulation logs:", sim.value.logs);
+			console.log("Simulation err:", sim.value.err);
 
-			toast.success(`Транзакция отправлена! Sig: ${sig}`);
+			if (sim.value.err) {
+				throw new Error("Simulation failed");
+			}
+			//	TEST
+
+
+			//
+			// const connection = new Connection(RPC_URL);
+			//
+			// const { blockhash } = await connection.getLatestBlockhash();
+			//
+			// const tx = new Transaction();
+			//
+			// tx.feePayer = publicKey;
+			// tx.recentBlockhash = blockhash;
+			//
+			// tx.add(ix);
+			//
+			// const sig = await sendTransaction(tx, connection);
+
+			// toast.success(`Транзакция отправлена! Sig: ${sig}`);
 			loadBalance();
 			setDepositAmount('');
 		} catch (error: any) {

@@ -6,7 +6,7 @@ edition = "2021"
 
 [lib]
 name = "clearing_service"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [features]
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]

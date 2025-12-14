@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/clearing-service"]
+members = ["clearing-service"]
 
 [provider]
 cluster = "devnet"

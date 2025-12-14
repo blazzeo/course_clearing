@@ -1,3 +1,4 @@
+use anchor_lang::InstructionData;
 use anyhow::{anyhow, Result};
 use clearing_service::instruction::DepositFunds;
 use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::CommitmentConfig};
@@ -73,12 +74,6 @@ impl BlockchainClient {
     ) -> Result<Instruction> {
         let (participant_pda, _participant_bump) = self.get_participant_pda(authority).await;
         let (withdrawal_pda, _withdrawal_bump) = self.get_withdrawal_pda(authority).await;
-
-        // let instruction_data = [
-        //     vec![2], // request_withdrawal instruction index
-        //     amount.to_le_bytes().to_vec(),
-        // ]
-        // .concat();
 
         let data = DepositFunds { amount }.data();
 

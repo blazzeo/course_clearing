@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/clearing-service"]
+members = ["clearing-service"]
 resolver = "2"
 
 [profile.release]
