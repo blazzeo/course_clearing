@@ -3,6 +3,8 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import axios from 'axios'
 import { API_URL } from '../App'
 import { toast } from 'react-toastify'
+import { Transaction, Connection, PublicKey, TransactionInstruction } from "@solana/web3.js"
+import { RPC_URL } from '../App'
 
 interface UserProfile {
 	address: string
@@ -19,10 +21,11 @@ interface UserProfile {
 }
 
 export default function Profile() {
-	const { publicKey } = useWallet()
+	const { publicKey, sendTransaction } = useWallet()
 	const [profile, setProfile] = useState<UserProfile | null>(null)
 	const [loading, setLoading] = useState(true)
 	const [editing, setEditing] = useState(false)
+	const [blockchainInitializing, setBlockchainInitializing] = useState(false)
 	const [formData, setFormData] = useState({
 		email: '',
 		first_name: '',
@@ -36,6 +39,46 @@ export default function Profile() {
 			loadProfile()
 		}
 	}, [publicKey])
+
+	const initializeBlockchainAccount = async (instructionData: any) => {
+		if (!publicKey || !sendTransaction) {
+			toast.error('Кошелек не подключен')
+			return
+		}
+
+		try {
+			setBlockchainInitializing(true)
+
+			const ix = new TransactionInstruction({
+				programId: new PublicKey(instructionData.program_id),
+				keys: instructionData.accounts.map((acc: any) => ({
+					pubkey: new PublicKey(acc.pubkey),
+					isSigner: acc.is_signer,
+					isWritable: acc.is_writable
+				})),
+				data: new Uint8Array(instructionData.data) as Buffer,
+			})
+
+			const connection = new Connection(RPC_URL, "confirmed")
+			const tx = new Transaction().add(ix)
+			tx.feePayer = publicKey
+
+			const { blockhash } = await connection.getRecentBlockhash()
+			tx.recentBlockhash = blockhash
+
+			const signature = await sendTransaction(tx, connection)
+			toast.success(`Инициализация в блокчейне завершена! Транзакция: ${signature}`)
+
+			// Перезагружаем профиль после успешной инициализации
+			await loadProfile()
+
+		} catch (error) {
+			console.error('Error initializing blockchain account:', error)
+			toast.error('Ошибка инициализации в блокчейне')
+		} finally {
+			setBlockchainInitializing(false)
+		}
+	}
 
 	const loadProfile = async () => {
 		if (!publicKey) return
@@ -53,9 +96,51 @@ export default function Profile() {
 					company: userData.company || ''
 				})
 			}
-		} catch (error) {
-			console.error('Error loading profile:', error)
-			toast.error('Ошибка загрузки профиля')
+		} catch (error: any) {
+			// Если профиль не найден (404), пытаемся зарегистрировать гостя
+			if (error.response?.status === 404) {
+				try {
+					const registerResponse = await axios.post(`${API_URL}/api/auth/register-guest`, {
+						address: publicKey.toBase58()
+					})
+
+					if (registerResponse.data.success) {
+						const registrationData = registerResponse.data.data
+
+						// Если требуется инициализация в блокчейне, автоматически отправляем транзакцию
+						if (!registrationData.blockchain_initialized && registrationData.instruction) {
+							toast.info('Регистрация завершена. Выполняется инициализация в блокчейне...', {
+								autoClose: 3000
+							})
+
+							// Автоматически инициализируем аккаунт в блокчейне
+							await initializeBlockchainAccount(registrationData.instruction)
+						} else {
+							toast.success('Регистрация гостя завершена')
+						}
+
+						// Перезагружаем профиль после регистрации
+						const profileResponse = await axios.get(`${API_URL}/api/profile?address=${publicKey.toBase58()}`)
+						if (profileResponse.data.success) {
+							const userData = profileResponse.data.data
+							setProfile(userData)
+							setFormData({
+								email: userData.email || '',
+								first_name: userData.first_name || '',
+								last_name: userData.last_name || '',
+								phone: userData.phone || '',
+								company: userData.company || ''
+							})
+						}
+					}
+				} catch (registerError) {
+					console.error('Error registering guest:', registerError)
+					toast.error('Ошибка регистрации гостя')
+				}
+			} else {
+				console.error('Error loading profile:', error)
+				toast.error('Ошибка загрузки профиля')
+			}
 		} finally {
 			setLoading(false)
 		}
@@ -112,29 +197,69 @@ export default function Profile() {
 					marginBottom: '24px',
 					display: 'flex',
 					alignItems: 'center',
+					justifyContent: 'space-between',
 					gap: '12px'
 				}}>
-					<div style={{
-						width: '24px',
-						height: '24px',
-						borderRadius: '50%',
-						background: '#856404',
-						display: 'flex',
-						alignItems: 'center',
-						justifyContent: 'center',
-						color: 'white',
-						fontSize: '14px',
-						fontWeight: 'bold'
-					}}>
-						!
+					<div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+						<div style={{
+							width: '24px',
+							height: '24px',
+							borderRadius: '50%',
+							background: '#856404',
+							display: 'flex',
+							alignItems: 'center',
+							justifyContent: 'center',
+							color: 'white',
+							fontSize: '14px',
+							fontWeight: 'bold'
+						}}>
+							!
+						</div>
+						<div style={{ flex: 1 }}>
+							<h4 style={{ margin: '0 0 4px 0', color: '#856404' }}>
+								Аккаунт не верифицирован
+							</h4>
+							<p style={{ margin: 0, color: '#856404', fontSize: '14px' }}>
+								Ваш аккаунт имеет статус "Гость". Для получения полного доступа к системе обратитесь к администратору для верификации аккаунта.
+							</p>
+						</div>
 					</div>
-					<div style={{ flex: 1 }}>
-						<h4 style={{ margin: '0 0 4px 0', color: '#856404' }}>
-							Аккаунт не верифицирован
-						</h4>
-						<p style={{ margin: 0, color: '#856404', fontSize: '14px' }}>
-							Ваш аккаунт имеет статус "Гость". Для получения полного доступа к системе обратитесь к администратору для верификации аккаунта.
-						</p>
+					<div style={{ display: 'flex', gap: '8px' }}>
+						<button
+							onClick={async () => {
+								try {
+									const registerResponse = await axios.post(`${API_URL}/api/auth/register-guest`, {
+										address: publicKey!.toBase58()
+									})
+
+									if (registerResponse.data.success) {
+										const registrationData = registerResponse.data.data
+
+										if (!registrationData.blockchain_initialized && registrationData.instruction) {
+											await initializeBlockchainAccount(registrationData.instruction)
+										} else {
+											toast.success('Аккаунт уже инициализирован в блокчейне')
+											loadProfile()
+										}
+									}
+								} catch (error) {
+									console.error('Error initializing blockchain account:', error)
+									toast.error('Ошибка инициализации')
+								}
+							}}
+							disabled={blockchainInitializing}
+							style={{
+								padding: '8px 16px',
+								background: blockchainInitializing ? '#ccc' : '#667eea',
+								color: 'white',
+								border: 'none',
+								borderRadius: '4px',
+								cursor: blockchainInitializing ? 'not-allowed' : 'pointer',
+								fontSize: '14px'
+							}}
+						>
+							{blockchainInitializing ? 'Инициализация...' : 'Инициализировать в блокчейне'}
+						</button>
 					</div>
 				</div>
 			)}

@@ -562,27 +562,101 @@ pub async fn get_participants(pool: web::Data<PgPool>) -> impl Responder {
 
 pub async fn register_participant(
     pool: web::Data<PgPool>,
+    blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<RegisterParticipantRequest>,
 ) -> impl Responder {
     let address = &req.address;
 
-    if sqlx::query("SELECT * FROM participants WHERE address = $1")
-        .bind(address)
-        .execute(pool.get_ref())
-        .await
-        .is_err()
-    {
-        return HttpResponse::Found().finish();
+    // Парсим адрес Solana
+    let user_pubkey = match solana_sdk::pubkey::Pubkey::from_str(address) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "Invalid address format".to_string(),
+            ))
+        }
+    };
+
+    // Проверяем, существует ли участник в базе данных
+    let participant_exists = sqlx::query!(
+        "SELECT COUNT(*) as count FROM participants WHERE address = $1",
+        address
+    )
+    .fetch_one(pool.get_ref())
+    .await;
+
+    let participant_count = match participant_exists {
+        Ok(result) => result.count.unwrap_or(0),
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Database error: {}",
+                e
+            )))
+        }
+    };
+
+    // Если участник не существует в БД, создаем запись
+    if participant_count == 0 {
+        let result = sqlx::query!("INSERT INTO participants (address) VALUES ($1)", address)
+            .execute(pool.get_ref())
+            .await;
+
+        if let Err(e) = result {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("Failed to create participant: {}", e),
+            ));
+        }
     }
 
-    let result = sqlx::query!("INSERT INTO participants (address) VALUES ($1)", address)
-        .execute(pool.get_ref())
-        .await;
+    // Проверяем, инициализирован ли участник в смарт-контракте
+    let is_initialized = match blockchain_client
+        .is_participant_initialized(&user_pubkey)
+        .await
+    {
+        Ok(initialized) => initialized,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Failed to check blockchain state: {}",
+                e
+            )))
+        }
+    };
 
-    match result {
-        Ok(_) => HttpResponse::Created().finish(),
-        Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<Participant>::error(e.to_string())),
+    if is_initialized {
+        // Участник уже инициализирован в смарт-контракте
+        HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+            "message": "Participant registered successfully",
+            "blockchain_initialized": true
+        })))
+    } else {
+        // Участник не инициализирован в смарт-контракте - создаем инструкцию
+        let instruction = match blockchain_client
+            .create_initialize_participant_instruction(&user_pubkey)
+            .await
+        {
+            Ok(ix) => ix,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("Failed to create instruction: {}", e),
+                ))
+            }
+        };
+
+        HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+            "message": "Participant registered in database. Initialize on blockchain required.",
+            "blockchain_initialized": false,
+            "instruction": {
+                "program_id": instruction.program_id.to_string(),
+                "accounts": instruction.accounts.iter().map(|acc| {
+                    serde_json::json!({
+                        "pubkey": acc.pubkey.to_string(),
+                        "is_signer": acc.is_signer,
+                        "is_writable": acc.is_writable,
+                    })
+                }).collect::<Vec<_>>(),
+                "data": instruction.data,
+            }
+        })))
     }
 }
 
@@ -906,12 +980,79 @@ pub async fn check_admin_status(
 /// Регистрация гостя (автоматическая)
 pub async fn register_guest_handler(
     pool: web::Data<PgPool>,
+    blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<RegisterParticipantRequest>,
 ) -> impl Responder {
-    match register_guest(pool.get_ref(), &req.address).await {
-        Ok(participant) => HttpResponse::Created().json(ApiResponse::success(participant)),
-        Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<Participant>::error(e.to_string())),
+    // Парсим адрес Solana
+    let user_pubkey = match solana_sdk::pubkey::Pubkey::from_str(&req.address) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "Invalid address format".to_string(),
+            ))
+        }
+    };
+
+    // Регистрируем гостя в базе данных
+    let participant = match register_guest(pool.get_ref(), &req.address).await {
+        Ok(p) => p,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<Participant>::error(e.to_string()))
+        }
+    };
+
+    // Проверяем, инициализирован ли участник в смарт-контракте
+    let is_initialized = match blockchain_client
+        .is_participant_initialized(&user_pubkey)
+        .await
+    {
+        Ok(initialized) => initialized,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Failed to check blockchain state: {}",
+                e
+            )))
+        }
+    };
+
+    if is_initialized {
+        // Участник уже инициализирован в смарт-контракте
+        HttpResponse::Created().json(ApiResponse::success(serde_json::json!({
+            "participant": participant,
+            "blockchain_initialized": true,
+            "message": "Guest registered and blockchain account already initialized"
+        })))
+    } else {
+        // Участник не инициализирован в смарт-контракте - создаем инструкцию
+        let instruction = match blockchain_client
+            .create_initialize_participant_instruction(&user_pubkey)
+            .await
+        {
+            Ok(ix) => ix,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("Failed to create instruction: {}", e),
+                ))
+            }
+        };
+
+        HttpResponse::Created().json(ApiResponse::success(serde_json::json!({
+            "participant": participant,
+            "blockchain_initialized": false,
+            "message": "Guest registered in database. Blockchain initialization required.",
+            "instruction": {
+                "program_id": instruction.program_id.to_string(),
+                "accounts": instruction.accounts.iter().map(|acc| {
+                    serde_json::json!({
+                        "pubkey": acc.pubkey.to_string(),
+                        "is_signer": acc.is_signer,
+                        "is_writable": acc.is_writable,
+                    })
+                }).collect::<Vec<_>>(),
+                "data": instruction.data,
+            }
+        })))
     }
 }
 

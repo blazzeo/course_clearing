@@ -1,6 +1,6 @@
 use anchor_lang::InstructionData;
 use anyhow::{anyhow, Result};
-use clearing_service::instruction::DepositFunds;
+use clearing_service::instruction::{DepositFunds, InitializeParticipant};
 use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::CommitmentConfig};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -39,6 +39,16 @@ impl BlockchainClient {
     /// Получить PDA для withdrawal
     pub async fn get_withdrawal_pda(&self, authority: &Pubkey) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"withdrawal", authority.as_ref()], &self.program_id)
+    }
+
+    /// Проверить, инициализирован ли участник в смарт-контракте
+    pub async fn is_participant_initialized(&self, authority: &Pubkey) -> Result<bool> {
+        let (participant_pda, _) = self.get_participant_pda(authority).await;
+
+        match self.client.get_account(&participant_pda).await {
+            Ok(_) => Ok(true), // Аккаунт существует
+            Err(_) => Ok(false), // Аккаунт не найден
+        }
     }
 
     /// Создать инструкцию для депозита средств
@@ -125,6 +135,28 @@ impl BlockchainClient {
             .get_balance(pubkey)
             .await
             .map_err(|e| anyhow!(e))
+    }
+
+    /// Создать инструкцию для инициализации участника
+    pub async fn create_initialize_participant_instruction(
+        &self,
+        authority: &Pubkey,
+    ) -> Result<Instruction> {
+        let (participant_pda, _participant_bump) = self.get_participant_pda(authority).await;
+
+        let data = InitializeParticipant {}.data();
+
+        let accounts = vec![
+            AccountMeta::new(participant_pda, false),
+            AccountMeta::new(*authority, true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+
+        Ok(Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        })
     }
 
     /// Получить баланс участника из смарт-контракта
