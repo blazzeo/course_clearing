@@ -52,6 +52,7 @@ impl UserRole {
                     | "cancel_position"
                     | "view_own_positions"
                     | "update_profile"
+                    | "deposit_funds"
             ),
             UserRole::Auditor => matches!(
                 action,

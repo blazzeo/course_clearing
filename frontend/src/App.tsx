@@ -19,6 +19,7 @@ import { Route, Routes } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import '@solana/wallet-adapter-react-ui/styles.css';
 
+export const PROGRAM_ID: string = import.meta.env.VITE_PROGRAM_ID!;
 export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 export const RPC_URL: string = import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 

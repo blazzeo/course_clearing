@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use crate::{
     auth_service::{
@@ -11,6 +11,7 @@ use crate::{
 use actix_web::{web, HttpResponse, Responder};
 use chrono::Utc;
 use serde::Serialize;
+use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
 
 /// Вспомогательная функция для извлечения адреса пользователя из query параметров
@@ -738,116 +739,6 @@ pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success(response))
 }
 
-/// Финализация отдельного расчета клиринга через смарт-контракт
-pub async fn finalize_single_settlement(
-    pool: web::Data<PgPool>,
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
-    path: web::Path<i32>,
-    query: web::Query<std::collections::HashMap<String, String>>,
-) -> impl Responder {
-    let settlement_id = path.into_inner();
-    let admin_address = match query.get("admin_address") {
-        Some(addr) => addr,
-        None => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "admin_address parameter required".to_string(),
-            ))
-        }
-    };
-
-    // Проверяем права администратора
-    if let Err(resp) = require_auth(&pool, admin_address, "finalize_settlement").await {
-        return resp;
-    }
-
-    // Получаем settlement из базы данных
-    let settlement = match sqlx::query!("SELECT * FROM settlements WHERE id = $1", settlement_id)
-        .fetch_optional(pool.get_ref())
-        .await
-    {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return HttpResponse::NotFound().json(ApiResponse::<String>::error(
-                "Settlement not found".to_string(),
-            ))
-        }
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(e.to_string()))
-        }
-    };
-
-    // Проверяем, что settlement еще не финализирован в блокчейне
-    if !settlement.tx_signature.is_empty() {
-        return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-            "Settlement already finalized on blockchain".to_string(),
-        ));
-    }
-
-    // Создаем инструкцию для финализации расчета
-    let from_pubkey = match solana_sdk::pubkey::Pubkey::from_str(&settlement.from_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid from_address".to_string(),
-            ))
-        }
-    };
-
-    let to_pubkey = match solana_sdk::pubkey::Pubkey::from_str(&settlement.to_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid to_address".to_string(),
-            ))
-        }
-    };
-
-    let admin_pubkey = match solana_sdk::pubkey::Pubkey::from_str(admin_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid admin address".to_string(),
-            ))
-        }
-    };
-
-    let instruction = match blockchain_client.create_finalize_settlement_instruction(
-        &from_pubkey,
-        &to_pubkey,
-        settlement.amount as u64,
-        &admin_pubkey,
-        settlement_id as u64,
-    ) {
-        Ok(ix) => ix,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "Failed to create instruction: {}",
-                e
-            )))
-        }
-    };
-
-    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-        "instruction": {
-            "program_id": instruction.program_id.to_string(),
-            "accounts": instruction.accounts.iter().map(|acc| {
-                serde_json::json!({
-                    "pubkey": acc.pubkey.to_string(),
-                    "is_signer": acc.is_signer,
-                    "is_writable": acc.is_writable,
-                })
-            }).collect::<Vec<_>>(),
-            "data": instruction.data,
-        },
-        "settlement_id": settlement_id,
-        "amount": settlement.amount,
-        "from_address": settlement.from_address,
-        "to_address": settlement.to_address,
-        "message": "Use this instruction to finalize the settlement on blockchain"
-    })))
-}
-
 pub async fn get_user_settlements(
     pool: web::Data<PgPool>,
     query: web::Query<std::collections::HashMap<String, String>>,
@@ -1449,7 +1340,7 @@ pub async fn delete_participant(
 /// Депозит средств в смарт-контракт
 pub async fn deposit_funds(
     pool: web::Data<PgPool>,
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
+    blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<DepositFundsRequest>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
@@ -1476,7 +1367,10 @@ pub async fn deposit_funds(
         }
     };
 
-    let instruction = match blockchain_client.create_deposit_instruction(&user_pubkey, req.amount) {
+    let instruction = match blockchain_client
+        .create_deposit_instruction(&user_pubkey, req.amount)
+        .await
+    {
         Ok(ix) => ix,
         Err(e) => {
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
@@ -1508,7 +1402,7 @@ pub async fn deposit_funds(
 /// Запрос на вывод средств
 pub async fn request_withdrawal(
     pool: web::Data<PgPool>,
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
+    blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<WithdrawalRequest>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
@@ -1535,15 +1429,18 @@ pub async fn request_withdrawal(
         }
     };
 
-    let instruction =
-        match blockchain_client.create_request_withdrawal_instruction(&user_pubkey, req.amount) {
-            Ok(ix) => ix,
-            Err(e) => {
-                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("Failed to create instruction: {}", e),
-                ))
-            }
-        };
+    let instruction = match blockchain_client
+        .create_request_withdrawal_instruction(&user_pubkey, req.amount)
+        .await
+    {
+        Ok(ix) => ix,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Failed to create instruction: {}",
+                e
+            )))
+        }
+    };
 
     HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
         "instruction": {
@@ -1565,7 +1462,7 @@ pub async fn request_withdrawal(
 /// Одобрение вывода средств (администратор)
 pub async fn approve_withdrawal(
     pool: web::Data<PgPool>,
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
+    blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<ApproveWithdrawalRequest>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
@@ -1604,6 +1501,7 @@ pub async fn approve_withdrawal(
 
     let instruction = match blockchain_client
         .create_approve_withdrawal_instruction(&withdrawal_pubkey, &admin_pubkey)
+        .await
     {
         Ok(ix) => ix,
         Err(e) => {
@@ -1630,96 +1528,13 @@ pub async fn approve_withdrawal(
     })))
 }
 
-/// Финализация расчета клиринга через смарт-контракт
-pub async fn finalize_settlement(
-    pool: web::Data<PgPool>,
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
-    req: web::Json<FinalizeSettlementRequest>,
-    query: web::Query<std::collections::HashMap<String, String>>,
-) -> impl Responder {
-    let admin_address = match query.get("admin_address") {
-        Some(addr) => addr,
-        None => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "admin_address parameter required".to_string(),
-            ))
-        }
-    };
-
-    // Проверяем права администратора
-    if let Err(resp) = require_auth(&pool, admin_address, "finalize_settlement").await {
-        return resp;
-    }
-
-    // Создаем инструкцию для финализации расчета
-    let from_pubkey = match solana_sdk::pubkey::Pubkey::from_str(&req.from_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid from_address".to_string(),
-            ))
-        }
-    };
-
-    let to_pubkey = match solana_sdk::pubkey::Pubkey::from_str(&req.to_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid to_address".to_string(),
-            ))
-        }
-    };
-
-    let admin_pubkey = match solana_sdk::pubkey::Pubkey::from_str(admin_address) {
-        Ok(pk) => pk,
-        Err(_) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "Invalid admin address".to_string(),
-            ))
-        }
-    };
-
-    let instruction = match blockchain_client.create_finalize_settlement_instruction(
-        &from_pubkey,
-        &to_pubkey,
-        req.amount,
-        &admin_pubkey,
-        req.settlement_id as u64,
-    ) {
-        Ok(ix) => ix,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "Failed to create instruction: {}",
-                e
-            )))
-        }
-    };
-
-    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-        "instruction": {
-            "program_id": instruction.program_id.to_string(),
-            "accounts": instruction.accounts.iter().map(|acc| {
-                serde_json::json!({
-                    "pubkey": acc.pubkey.to_string(),
-                    "is_signer": acc.is_signer,
-                    "is_writable": acc.is_writable,
-                })
-            }).collect::<Vec<_>>(),
-            "data": instruction.data,
-        },
-        "settlement_id": req.settlement_id,
-        "amount": req.amount,
-        "message": "Use this instruction data to create and sign a transaction on the frontend (admin only)"
-    })))
-}
-
 /// Получение баланса в блокчейне
 pub async fn get_blockchain_balance(
-    blockchain_client: web::Data<crate::blockchain::BlockchainClient>,
+    blockchain_client: web::Data<std::sync::Arc<crate::blockchain::BlockchainClient>>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let address = match query.get("address") {
-        Some(addr) => addr,
+        Some(addr) => addr.clone(),
         None => {
             return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
                 "address parameter required".to_string(),
@@ -1727,7 +1542,7 @@ pub async fn get_blockchain_balance(
         }
     };
 
-    let pubkey = match solana_sdk::pubkey::Pubkey::from_str(address) {
+    let pubkey = match Pubkey::from_str(&address) {
         Ok(pk) => pk,
         Err(_) => {
             return HttpResponse::BadRequest()
@@ -1735,17 +1550,28 @@ pub async fn get_blockchain_balance(
         }
     };
 
-    match blockchain_client.get_balance(&pubkey) {
-        Ok(balance) => {
-            let response = BlockchainBalanceResponse {
-                blockchain_balance: balance,
-                contract_balance: None, // В будущем можно добавить чтение из смарт-контракта
-            };
-            HttpResponse::Ok().json(ApiResponse::success(response))
+    let client = blockchain_client.clone();
+
+    // Получаем blockchain balance
+    let blockchain_balance = match client.get_balance(&pubkey).await {
+        Ok(balance) => balance,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("RPC error: {e}")));
         }
-        Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "Failed to get balance: {}",
-            e
-        ))),
-    }
+    };
+
+    // Получаем contract balance из смарт-контракта
+    let contract_balance = match client.get_participant_balance(&pubkey).await {
+        Ok(balance) => balance,
+        Err(e) => {
+            tracing::warn!("Failed to get contract balance: {}", e);
+            None
+        }
+    };
+
+    HttpResponse::Ok().json(ApiResponse::success(BlockchainBalanceResponse {
+        blockchain_balance,
+        contract_balance,
+    }))
 }

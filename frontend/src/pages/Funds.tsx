@@ -3,6 +3,8 @@ import axios from 'axios'
 import { API_URL } from '../App'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
+import { Transaction, Connection, PublicKey, TransactionInstruction } from "@solana/web3.js"
+import { RPC_URL } from '../App'
 
 interface BlockchainBalance {
 	blockchain_balance: number
@@ -57,61 +59,112 @@ export default function Funds() {
 
 	const handleDeposit = async () => {
 		if (!publicKey) {
-			toast.error('Подключите кошелек')
-			return
+			toast.error('Подключите кошелек');
+			return;
 		}
-
-		const amount = parseFloat(depositAmount)
+		const amount = parseFloat(depositAmount);
 		if (!amount || amount <= 0) {
-			toast.error('Введите корректную сумму')
-			return
+			toast.error('Введите корректную сумму');
+			return;
 		}
-
 		try {
-			setActionLoading(true)
+			setActionLoading(true);
 
-			// Mock API call - в реальной версии здесь будет взаимодействие с блокчейном
-			toast.success(`Депозит ${amount} SOL выполнен (mock)!`)
+			// 1. Получаем инструкцию депозита от API
+			const resp = await axios.post(
+				`${API_URL}/api/blockchain/deposit?address=${publicKey.toBase58()}`,
+				{ amount: Math.round(amount * 1e9) }
+			);
+			if (!resp.data.success) throw new Error(resp.data.error || 'Ошибка депозита');
+			const instructionData = resp.data.data.instruction;
 
-			// Обновляем баланс
-			loadBalance()
-			setDepositAmount('')
+			if (!Array.isArray(instructionData.data)) {
+				throw new Error('Invalid instruction data format');
+			}
 
+			const ix = new TransactionInstruction({
+				programId: new PublicKey(instructionData.program_id),
+				keys: instructionData.accounts.map((acc: any) => ({
+					pubkey: new PublicKey(acc.pubkey),
+					isSigner: acc.is_signer,
+					isWritable: acc.is_writable
+				})),
+				data: new Uint8Array(instructionData.data) as Buffer,
+			});
+
+			const connection = new Connection(RPC_URL);
+
+			const { blockhash } = await connection.getLatestBlockhash();
+
+			const tx = new Transaction();
+
+			tx.feePayer = publicKey;
+			tx.recentBlockhash = blockhash;
+
+			tx.add(ix);
+
+			const sig = await sendTransaction(tx, connection);
+
+			toast.success(`Транзакция отправлена! Sig: ${sig}`);
+			loadBalance();
+			setDepositAmount('');
 		} catch (error: any) {
-			console.error('Deposit error:', error)
-			toast.error(error.message || 'Ошибка депозита')
+			console.error('Deposit error:', error);
+			toast.error(error.message || 'Ошибка депозита');
 		} finally {
-			setActionLoading(false)
+			setActionLoading(false);
 		}
 	}
 
 	const handleWithdrawalRequest = async () => {
 		if (!publicKey) {
-			toast.error('Подключите кошелек')
-			return
+			toast.error('Подключите кошелек');
+			return;
 		}
-
-		const amount = parseFloat(withdrawalAmount)
+		const amount = parseFloat(withdrawalAmount);
 		if (!amount || amount <= 0) {
-			toast.error('Введите корректную сумму')
-			return
+			toast.error('Введите корректную сумму');
+			return;
 		}
-
 		try {
-			setActionLoading(true)
+			setActionLoading(true);
+			// 1. Получаем инструкцию вывода от API
+			const resp = await axios.post(
+				`${API_URL}/api/blockchain/withdraw/request?address=${publicKey.toBase58()}`,
+				{ amount: Math.round(amount * 1e9) }
+			);
+			if (!resp.data.success) throw new Error(resp.data.error || 'Ошибка вывода');
+			const instructionData = resp.data.data.instruction;
 
-			// Mock API call
-			toast.success(`Запрос на вывод ${amount} SOL создан (mock)!`)
+			const ix = new TransactionInstruction({
+				programId: new PublicKey(instructionData.program_id),
+				keys: instructionData.accounts.map((acc: any) => ({
+					pubkey: new PublicKey(acc.pubkey),
+					isSigner: acc.is_signer,
+					isWritable: acc.is_writable
+				})),
+				data: Uint8Array.from(instructionData.data.data) as Buffer,
+			});
 
-			// Обновляем список запросов
-			loadWithdrawalRequests()
-			setWithdrawalAmount('')
+			const connection = new Connection(RPC_URL);
+			const { blockhash } = await connection.getLatestBlockhash();
 
+			const tx = new Transaction();
+
+			tx.feePayer = publicKey;
+			tx.recentBlockhash = blockhash;
+
+			tx.add(ix);
+
+			const sig = await sendTransaction(tx, connection);
+			toast.success(`Запрос отправлен! Sig: ${sig}`);
+			loadBalance();
+			setWithdrawalAmount('');
 		} catch (error: any) {
-			console.error('Withdrawal request error:', error)
-			toast.error(error.message || 'Ошибка запроса на вывод')
+			console.error('Withdrawal error:', error);
+			toast.error(error.message || 'Ошибка запроса на вывод');
 		} finally {
-			setActionLoading(false)
+			setActionLoading(false);
 		}
 	}
 

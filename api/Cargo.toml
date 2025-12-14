@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clearing_service = { path = "../program/programs/clearing-service" }
 actix-web = "4.4"
 actix-cors = "0.6"
 tokio = { version = "1.35", features = ["full"] }
@@ -22,9 +23,6 @@ tracing = "0.1"
 ed25519-dalek = "2.2.0"
 base64 = "0.22.1"
 solana-program = "3.0.0"
-
-
-
-
-
+# anchor-lang = { version = "0.32.1", features = ["derive"] }
+# borsh = { version = "1.6.0", features = ["derive"] }
 

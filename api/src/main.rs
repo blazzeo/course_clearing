@@ -6,12 +6,10 @@ mod handlers;
 mod ledger_engine;
 mod models;
 
-// use auth_service::register_guest;
-
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use dotenv::dotenv;
-use std::env;
+use std::{env, sync::Arc};
 
 fn parse_env() -> (String, u16, String, String) {
     let solana_rpc_url = env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL env missing");
@@ -42,7 +40,7 @@ async fn main() -> std::io::Result<()> {
     let blockchain_client = blockchain::BlockchainClient::new(&solana_rpc_url)
         .expect("Failed to create blockchain client");
 
-    let blockchain_client_data = web::Data::new(blockchain_client);
+    let blockchain_client_data = Arc::new(blockchain_client);
 
     db::run_migrations(&pool)
         .await
@@ -164,14 +162,6 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/blockchain/withdraw/approve",
                         web::post().to(handlers::approve_withdrawal),
-                    )
-                    .route(
-                        "/blockchain/settlement/finalize",
-                        web::post().to(handlers::finalize_settlement),
-                    )
-                    .route(
-                        "/blockchain/settlement/{id}/finalize",
-                        web::post().to(handlers::finalize_single_settlement),
                     )
                     .route(
                         "/blockchain/balance",
