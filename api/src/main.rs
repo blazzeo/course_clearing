@@ -2,6 +2,7 @@ mod admin_service;
 mod auth_service;
 mod blockchain;
 mod db;
+pub mod endpoints;
 mod handlers;
 mod ledger_engine;
 mod models;
@@ -69,34 +70,49 @@ async fn main() -> std::io::Result<()> {
             .route("/system/info", web::get().to(handlers::get_system_info))
             .service(
                 web::scope("/api")
-                    .route("/positions", web::get().to(handlers::get_positions))
-                    .route("/positions", web::post().to(handlers::create_position))
-                    .route("/positions/{id}", web::get().to(handlers::get_position))
-                    .route("/positions/{id}", web::put().to(handlers::update_position))
+                    .route(
+                        "/positions",
+                        web::get().to(endpoints::positions::get_positions),
+                    )
+                    .route(
+                        "/positions",
+                        web::post().to(endpoints::positions::create_position),
+                    )
                     .route(
                         "/positions/{id}",
-                        web::delete().to(handlers::delete_position),
+                        web::get().to(endpoints::positions::get_position),
+                    )
+                    .route(
+                        "/positions/{id}",
+                        web::put().to(endpoints::positions::update_position),
+                    )
+                    .route(
+                        "/positions/{id}",
+                        web::delete().to(endpoints::positions::delete_position),
                     )
                     .route(
                         "/positions/{id}/confirm",
-                        web::post().to(handlers::confirm_position),
+                        web::post().to(endpoints::positions::confirm_position),
                     )
                     .route(
                         "/positions/{id}/clear",
-                        web::post().to(handlers::execute_clearing),
+                        web::post().to(endpoints::clearing::execute_clearing),
                     )
-                    .route("/participants", web::get().to(handlers::get_participants))
                     .route(
                         "/participants",
-                        web::post().to(handlers::register_participant),
+                        web::get().to(endpoints::users::get_participants),
+                    )
+                    .route(
+                        "/participants",
+                        web::post().to(endpoints::users::register_participant),
                     )
                     .route(
                         "/participants/{address}",
-                        web::get().to(handlers::get_participant),
+                        web::get().to(endpoints::users::get_participant),
                     )
                     .route(
                         "/clearing/run",
-                        web::post().to(handlers::multi_party_clearing),
+                        web::post().to(endpoints::clearing::multi_party_clearing),
                     )
                     .route(
                         "/settlements",
@@ -106,35 +122,38 @@ async fn main() -> std::io::Result<()> {
                         "/settlements/{id}/pay",
                         web::post().to(handlers::pay_settlement),
                     )
-                    .route("/admins", web::get().to(handlers::get_admins))
-                    .route("/admins/add", web::post().to(handlers::add_admin))
-                    .route("/admins/remove", web::post().to(handlers::remove_admin))
+                    .route("/admins", web::get().to(endpoints::admin::get_admins))
+                    .route("/admins/add", web::post().to(endpoints::admin::add_admin))
+                    .route(
+                        "/admins/remove",
+                        web::post().to(endpoints::admin::remove_admin),
+                    )
                     .route(
                         "/admins/check/{address}",
-                        web::get().to(handlers::check_admin_status),
+                        web::get().to(endpoints::admin::check_admin_status),
                     )
                     // Новые маршруты для ролей и профилей
                     .route(
                         "/auth/register-guest",
-                        web::post().to(handlers::register_guest_handler),
+                        web::post().to(endpoints::users::register_guest_handler),
                     )
-                    .route("/profile", web::get().to(handlers::get_profile))
-                    .route("/profile", web::put().to(handlers::update_profile))
+                    .route("/profile", web::get().to(endpoints::users::get_profile))
+                    .route("/profile", web::put().to(endpoints::users::update_profile))
                     .route(
                         "/admin/change-role",
-                        web::post().to(handlers::change_user_role),
+                        web::post().to(endpoints::admin::change_user_role),
                     )
                     .route(
                         "/admin/deactivate",
-                        web::post().to(handlers::deactivate_participant),
+                        web::post().to(endpoints::admin::deactivate_participant),
                     )
                     .route(
                         "/admin/activate",
-                        web::post().to(handlers::activate_participant),
+                        web::post().to(endpoints::admin::activate_participant),
                     )
                     .route(
                         "/admin/delete/{address}",
-                        web::delete().to(handlers::delete_participant),
+                        web::delete().to(endpoints::admin::delete_participant),
                     )
                     .route(
                         "/system/settings",
@@ -144,28 +163,47 @@ async fn main() -> std::io::Result<()> {
                         "/system/settings",
                         web::post().to(handlers::update_system_settings),
                     )
-                    .route("/audit/log", web::get().to(handlers::get_audit_log))
-                    .route("/audit/balances", web::get().to(handlers::get_all_balances))
+                    .route("/audit/log", web::get().to(endpoints::log::get_audit_log))
                     .route(
-                        "/admin/deploy-contract",
-                        web::post().to(handlers::deploy_clearing_contract),
+                        "/audit/balances",
+                        web::get().to(endpoints::funds::get_all_balances),
+                    )
+                    .route(
+                        "/admin/initialize-escrow",
+                        web::post().to(endpoints::blockchain::initialize_escrow),
+                    )
+                    .route(
+                        "/admin/withdrawals",
+                        web::get().to(endpoints::funds::get_all_withdrawals),
                     )
                     // Новые endpoints для работы со смарт-контрактом
                     .route(
+                        "/blockchain/withdrawals",
+                        web::get().to(endpoints::funds::get_withdrawals),
+                    )
+                    .route(
+                        "/blockchain/withdrawals",
+                        web::delete().to(endpoints::funds::delete_withdrawal),
+                    )
+                    .route(
                         "/blockchain/deposit",
-                        web::post().to(handlers::deposit_funds),
+                        web::post().to(endpoints::blockchain::deposit_funds),
                     )
                     .route(
                         "/blockchain/withdraw/request",
-                        web::post().to(handlers::request_withdrawal),
+                        web::post().to(endpoints::blockchain::request_withdrawal),
                     )
                     .route(
                         "/blockchain/withdraw/approve",
-                        web::post().to(handlers::approve_withdrawal),
+                        web::post().to(endpoints::blockchain::approve_withdrawal),
+                    )
+                    .route(
+                        "/blockchain/withdraw/complete",
+                        web::post().to(endpoints::blockchain::complete_withdrawal),
                     )
                     .route(
                         "/blockchain/balance",
-                        web::get().to(handlers::get_blockchain_balance),
+                        web::get().to(endpoints::blockchain::get_blockchain_balance),
                     ),
             )
     })
