@@ -153,44 +153,22 @@ pub struct DepositFundsRequest {
     pub amount: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
-pub struct Withdrawal {
-    pub id: i32,
-    pub participant: String,
-    pub amount: i64,
-    pub status: String,
-    pub requested_at: DateTime<Utc>,
-    pub approved_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub tx_signature: Option<String>,
-    pub nonce: Option<i64>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
-pub struct WithdrawalParticipant {
-    pub id: i32,
-    pub amount: i64,
-    pub status: String,
-    pub nonce: Option<i64>,
-    pub requested_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WithdrawalRequest {
-    pub amount: i64,
+    pub amount: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApproveWithdrawalRequest {
     pub withdrawal_address: String,
-    pub withdrawal_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CompleteWithdrawalRequest {
-    pub withdrawal_address: String,
-    pub tx_signature: String,
+pub struct FinalizeSettlementRequest {
+    pub settlement_id: i32,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -53,8 +53,6 @@ impl UserRole {
                     | "view_own_positions"
                     | "update_profile"
                     | "deposit_funds"
-                    | "request_withdrawal"
-                    | "view_withdrawals"
             ),
             UserRole::Auditor => matches!(
                 action,
