@@ -197,6 +197,7 @@ export default function Funds() {
 			if (!resp.data.success) throw new Error(resp.data.error || 'Ошибка вывода');
 
 			const instructionData = resp.data.data.instruction;
+			const withdraw_pda = resp.data.data.pda;
 
 			const ix = new TransactionInstruction({
 				programId: new PublicKey(instructionData.program_id),
@@ -229,6 +230,7 @@ export default function Funds() {
 				`${API_URL}/api/blockchain/withdraw/confirm?address=${publicKey.toBase58()}`,
 				{
 					amount: Math.round(amount * 1e9),
+					pda: withdraw_pda,
 					tx_signature: sig
 				}
 			);
@@ -387,7 +389,8 @@ export default function Funds() {
 										<td>
 											<span style={{
 												color: request.status === 'approved' ? '#4caf50' :
-													request.status === 'pending' ? '#ff9800' : '#f44336',
+													request.status === 'pending' ? '#ff9800' :
+														request.status === 'completed' ? '#2196f3' : '#f44336',
 												fontWeight: 'bold'
 											}}>
 												{request.status === 'pending' ? 'Ожидает' :

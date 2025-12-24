@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, status, nonce, pda FROM withdrawals WHERE id = $1 AND participant = $2",
+  "query": "SELECT id, status, nonce, pda FROM withdrawals WHERE pda = $1 AND participant = $2",
   "describe": {
     "columns": [
       {
@@ -26,7 +26,7 @@
     ],
     "parameters": {
       "Left": [
-        "Int4",
+        "Text",
         "Text"
       ]
     },
@@ -37,5 +37,5 @@
       false
     ]
   },
-  "hash": "d2e9e9208c6e663b7b67b7f9f0d9c1383a1e3a3da4b4611c4bd3d8b54bde7b29"
+  "hash": "b6f5c094cb44302f5e32447f291e7cc34310cc47c17b4f1c7f4366b62bc471bb"
 }

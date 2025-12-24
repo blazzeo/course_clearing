@@ -27,7 +27,7 @@ interface BalanceEntry {
 export default function AuditorPanel() {
 	const { publicKey } = useWallet()
 	const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([])
-	const [balances, setBalances] = useState<BalanceEntry[]>([])
+	// const [balances, setBalances] = useState<BalanceEntry[]>([])
 	const [loadingLogs, setLoadingLogs] = useState(true)
 	const [loadingBalances, setLoadingBalances] = useState(true)
 	const [activeTab, setActiveTab] = useState<'logs' | 'balances'>('logs')
@@ -133,6 +133,7 @@ export default function AuditorPanel() {
 		</div>
 	)
 }
+
 
 
 

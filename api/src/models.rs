@@ -164,6 +164,7 @@ pub struct Withdrawal {
     pub completed_at: Option<DateTime<Utc>>,
     pub tx_signature: Option<String>,
     pub nonce: Option<i64>,
+    pub pda: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
@@ -183,7 +184,7 @@ pub struct WithdrawalRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApproveWithdrawalRequest {
     pub withdrawal_address: String,
-    pub withdrawal_id: Option<i32>,
+    pub withdrawal_pda: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -195,7 +196,8 @@ pub struct ConfirmWithdrawalRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CompleteWithdrawalRequest {
-    pub withdrawal_address: String,
+    pub user_address: String,
+    pub withdrawal_pda: String,
     pub tx_signature: String,
 }
 

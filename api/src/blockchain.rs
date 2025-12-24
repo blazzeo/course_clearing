@@ -14,7 +14,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "CqGLe8rkRRdubZ1M4nBo5MAxxwWM1HT4anVxb9diaE9V";
+const PROGRAM_ID: &str = "ARJmooR8RhUjSkYiYBYtDSpPam1khAmYorn2ckmUC9vQ";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {
@@ -160,7 +160,7 @@ impl BlockchainClient {
         &self,
         authority: &Pubkey,
         amount: i64,
-    ) -> Result<Instruction> {
+    ) -> Result<(Instruction, String)> {
         tracing::info!(
             "Creating withdrawal instruction for authority: {}, amount: {}",
             authority,
@@ -237,11 +237,14 @@ impl BlockchainClient {
             authority
         );
 
-        Ok(Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        })
+        Ok((
+            Instruction {
+                program_id: self.program_id,
+                accounts,
+                data,
+            },
+            withdrawal_pda.to_string(),
+        ))
     }
 
     /// Создать инструкцию для одобрения вывода (только администратор)

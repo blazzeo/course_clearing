@@ -37,7 +37,8 @@ interface WithdrawalData {
 	approved_at?: string,
 	completed_at?: string,
 	tx_signature?: string,
-	created_at: string
+	created_at: string,
+	pda: string
 }
 
 export default function AdminPanel() {
@@ -131,6 +132,7 @@ export default function AdminPanel() {
 			loadAdmins()
 			loadAllUsers()
 			loadSystemSettings()
+			loadWithdrawals()
 		}
 	}, [isAdmin])
 
@@ -187,7 +189,7 @@ export default function AdminPanel() {
 		}
 	}
 
-	const approveWithdrawal = async (participantAddress: string, withdrawalId?: number) => {
+	const approveWithdrawal = async (participantAddress: string, withdrawalPda?: String) => {
 		if (!publicKey) {
 			toast.error('Подключите кошелек')
 			return
@@ -197,7 +199,7 @@ export default function AdminPanel() {
 			setActionLoading(true)
 			const response = await axios.post(`${API_URL}/api/blockchain/withdraw/approve?admin_address=${publicKey?.toBase58()}`, {
 				withdrawal_address: participantAddress,
-				withdrawal_id: withdrawalId
+				withdrawal_pda: withdrawalPda
 			})
 
 			if (response.data.success) {
@@ -248,7 +250,8 @@ export default function AdminPanel() {
 				// Обновляем статус в базе данных
 				try {
 					await axios.post(`${API_URL}/api/blockchain/withdraw/complete`, {
-						withdrawal_address: participantAddress,
+						user_address: participantAddress,
+						withdrawal_pda: withdrawalPda,
 						tx_signature: signature
 					})
 				} catch (completeError) {
@@ -928,7 +931,7 @@ export default function AdminPanel() {
 												<td style={{ padding: '12px' }}>
 													{withdrawal.status === 'pending' && (
 														<button
-															onClick={() => approveWithdrawal(withdrawal.participant, withdrawal.id)}
+															onClick={() => approveWithdrawal(withdrawal.participant, withdrawal.pda)}
 															disabled={actionLoading}
 															style={{
 																padding: '6px 12px',

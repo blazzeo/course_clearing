@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, participant, amount, status, requested_at, approved_at, completed_at, tx_signature, nonce\n        FROM withdrawals\n        ORDER BY requested_at DESC\n        ",
+  "query": "\n        SELECT id, participant, amount, status, requested_at, approved_at, completed_at, tx_signature, nonce, pda\n        FROM withdrawals\n        ORDER BY requested_at DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -47,6 +47,11 @@
         "ordinal": 8,
         "name": "nonce",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "pda",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -61,8 +66,9 @@
       true,
       true,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "b60726bcc81765b64e03278a53e3be311f7f05974cbe6cef68fa73d36daf09c9"
+  "hash": "1a96739107938e67c4ca51cdc9db9e2ea637555707265c5c1d36f5e271d0c568"
 }

@@ -93,17 +93,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 										fontWeight: location.pathname === '/positions' ? '600' : '400'
 									}}
 								>
-									Мои позиции
-								</Link>
-								<Link
-									to="/positions/create"
-									style={{
-										textDecoration: 'none',
-										color: location.pathname === '/positions/create' ? '#667eea' : '#666',
-										fontWeight: location.pathname === '/positions' ? '600' : '400'
-									}}
-								>
-									Создать позицию
+									Позиции
 								</Link>
 								<Link
 									to="/bills"
@@ -113,7 +103,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 										fontWeight: location.pathname === '/bills' ? '600' : '400'
 									}}
 								>
-									Мои счета
+									Счета
 								</Link>
 								<Link
 									to="/funds"

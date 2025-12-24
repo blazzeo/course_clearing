@@ -73,7 +73,7 @@ pub async fn get_all_withdrawals(
     let withdrawals = sqlx::query_as!(
         Withdrawal,
         r#"
-        SELECT id, participant, amount, status, requested_at, approved_at, completed_at, tx_signature, nonce
+        SELECT id, participant, amount, status, requested_at, approved_at, completed_at, tx_signature, nonce, pda
         FROM withdrawals
         ORDER BY requested_at DESC
         "#,

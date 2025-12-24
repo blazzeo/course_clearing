@@ -65,7 +65,7 @@ export default function Positions() {
 
 		try {
 			setActionLoading(id)
-			const response = await axios.delete(`${API_URL}/positions/${id}?pbkey=${publicKey}`)
+			const response = await axios.delete(`${API_URL}/api/positions/${id}?pbkey=${publicKey}`)
 			if (response.data.success) {
 				toast.success('Позиция отменена')
 				loadPositions()
@@ -104,7 +104,7 @@ export default function Positions() {
 
 			const sig_b64 = toBase64(signature);
 
-			await axios.post(`${API_URL}/positions/${id}/confirm`, {
+			await axios.post(`${API_URL}/api/positions/${id}/confirm`, {
 				wallet: publicKey.toBase58(),
 				position_id: id,
 				timestamp,
@@ -121,7 +121,7 @@ export default function Positions() {
 
 	const handleClear = async (id: number) => {
 		try {
-			await axios.post(`${API_URL}/positions/${id}/clear`)
+			await axios.post(`${API_URL}/api/positions/${id}/clear`)
 			loadPositions()
 		} catch (error) {
 			console.error('Error clearing position:', error)

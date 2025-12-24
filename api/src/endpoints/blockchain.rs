@@ -5,7 +5,6 @@ use crate::models::{
     ConfirmWithdrawalRequest, DepositFundsRequest, WithdrawalRequest,
 };
 use actix_web::{web, HttpResponse, Responder};
-use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
 use std::{str::FromStr, sync::Arc};
@@ -88,30 +87,6 @@ pub async fn deposit_funds(
         "message": "Use this instruction data to create and sign a transaction on the frontend"
     })))
 }
-
-// #[derive(Serialize, Deserialize)]
-// pub struct DepositSuccessfulRequest {
-//     pub address: String,
-//     pub amount: i64,
-// }
-//
-// pub async fn deposit_successful(
-//     pool: web::Data<PgPool>,
-//     req: web::Json<DepositSuccessfulRequest>,
-// ) -> impl Responder {
-//     let user_address = &req.address;
-//     let deposit_amount = req.amount;
-//
-//     sqlx::query(
-//         r#"
-//
-//         "#,
-//     )
-//     .execute(pool)
-//     .await;
-//
-//     HttpResponse::Ok().finish()
-// }
 
 /// Запрос на вывод средств
 /// Создание инструкции для запроса вывода средств (без сохранения в БД)
@@ -202,8 +177,7 @@ pub async fn request_withdrawal_instruction(
     }
 
     // Создаем инструкцию для запроса вывода
-    tracing::info!("Creating withdrawal instruction for user: {}", user_address);
-    let instruction = match blockchain_client
+    let (instruction, withdrawal_pda) = match blockchain_client
         .create_request_withdrawal_instruction(&user_pubkey, req.amount)
         .await
     {
@@ -239,7 +213,8 @@ pub async fn request_withdrawal_instruction(
             "data": instruction.data,
         },
         "amount": req.amount,
-        "message": "Use this instruction data to create and sign a transaction on the frontend"
+        "message": "Use this instruction data to create and sign a transaction on the frontend",
+        "pda": withdrawal_pda
     })))
 }
 
@@ -346,10 +321,10 @@ pub async fn complete_withdrawal(
         SET status = 'completed',
             tx_signature = $2,
             completed_at = NOW()
-        WHERE participant = $1 AND status = 'pending'
+        WHERE pda = $1 AND status = 'pending'
         RETURNING id
         "#,
-        req.withdrawal_address,
+        req.withdrawal_pda,
         req.tx_signature
     )
     .fetch_optional(pool.get_ref())
@@ -360,7 +335,7 @@ pub async fn complete_withdrawal(
             // Логируем завершение вывода
             let _ = log_audit_action(
                 &pool,
-                &req.withdrawal_address,
+                &req.user_address,
                 "complete_withdrawal",
                 "withdrawal",
                 Some(&record.id.to_string()),
@@ -392,9 +367,9 @@ pub async fn approve_withdrawal(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     tracing::info!(
-        "Approving withdrawal for address: {}, withdrawal_id: {:?}",
+        "Approving withdrawal for address: {}, withdrawal_pad: {:?}",
         req.withdrawal_address,
-        req.withdrawal_id
+        req.withdrawal_pda
     );
 
     let admin_address = match query.get("admin_address") {
@@ -437,12 +412,12 @@ pub async fn approve_withdrawal(
         pda: String,
     }
 
-    let withdrawal_record = if let Some(withdrawal_id) = req.withdrawal_id {
+    let withdrawal_record = if let Some(withdrawal_pda) = &req.withdrawal_pda {
         // Используем указанный ID
         match sqlx::query_as!(
             WithdrawalRecord,
-            "SELECT id, status, nonce, pda FROM withdrawals WHERE id = $1 AND participant = $2",
-            withdrawal_id,
+            "SELECT id, status, nonce, pda FROM withdrawals WHERE pda = $1 AND participant = $2",
+            withdrawal_pda,
             req.withdrawal_address
         )
         .fetch_optional(pool.get_ref())
@@ -509,7 +484,7 @@ pub async fn approve_withdrawal(
             &withdrawal_pubkey,
             &withdrawal_pubkey,
             &admin_pubkey,
-            withdrawal_record.pda, // req.withdrawal_id.unwrap_or(0) as i64,
+            withdrawal_record.pda.clone(), // req.withdrawal_id.unwrap_or(0) as i64,
         )
         .await
     {
@@ -534,7 +509,8 @@ pub async fn approve_withdrawal(
             }).collect::<Vec<_>>(),
             "data": instruction.data,
         },
-        "message": "Use this instruction data to create and sign a transaction on the frontend (admin only)"
+        "message": "Use this instruction data to create and sign a transaction on the frontend (admin only)",
+        "pda": withdrawal_record.pda
     })))
 }
 
