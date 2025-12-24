@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, status, nonce FROM withdrawals WHERE id = $1 AND participant = $2",
+  "query": "SELECT id, status, nonce, pda FROM withdrawals WHERE id = $1 AND participant = $2",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "nonce",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "pda",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -28,8 +33,9 @@
     "nullable": [
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "d169eeae90d1fefbecceacac329972aab8a98d6fe56c542c0eeb1861a14b03ad"
+  "hash": "d2e9e9208c6e663b7b67b7f9f0d9c1383a1e3a3da4b4611c4bd3d8b54bde7b29"
 }

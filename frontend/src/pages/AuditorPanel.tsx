@@ -81,44 +81,12 @@ export default function AuditorPanel() {
 
 	return (
 		<div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-			<h1>Панель аудитора</h1>
-
-			{/* Tabs */}
-			<div style={{ marginBottom: '24px' }}>
-				<div style={{ display: 'flex', borderBottom: '1px solid #ddd' }}>
-					<button
-						onClick={() => setActiveTab('logs')}
-						style={{
-							padding: '12px 24px',
-							border: 'none',
-							background: activeTab === 'logs' ? '#667eea' : 'transparent',
-							color: activeTab === 'logs' ? 'white' : '#666',
-							cursor: 'pointer',
-							borderBottom: activeTab === 'logs' ? '2px solid #667eea' : 'none'
-						}}
-					>
-						Логи аудита
-					</button>
-					<button
-						onClick={() => setActiveTab('balances')}
-						style={{
-							padding: '12px 24px',
-							border: 'none',
-							background: activeTab === 'balances' ? '#667eea' : 'transparent',
-							color: activeTab === 'balances' ? 'white' : '#666',
-							cursor: 'pointer',
-							borderBottom: activeTab === 'balances' ? '2px solid #667eea' : 'none'
-						}}
-					>
-						Балансы контрагентов
-					</button>
-				</div>
-			</div>
+			<h1 style={{ color: 'white' }}>Панель аудитора</h1>
 
 			{/* Audit Logs Tab */}
 			{activeTab === 'logs' && (
 				<div>
-					<h2>История действий пользователей</h2>
+					<h2 style={{ color: 'white', margin: '15px 0' }}>История действий пользователей</h2>
 					{loadingLogs ? (
 						<div>Загрузка логов...</div>
 					) : (
@@ -162,59 +130,12 @@ export default function AuditorPanel() {
 				</div>
 			)}
 
-			{/* Balances Tab */}
-			{activeTab === 'balances' && (
-				<div>
-					<h2>Текущие балансы контрагентов</h2>
-					{loadingBalances ? (
-						<div>Загрузка балансов...</div>
-					) : (
-						<div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-							{balances.length === 0 ? (
-								<div style={{ padding: '24px', textAlign: 'center', color: '#666' }}>
-									Балансы отсутствуют
-								</div>
-							) : (
-								<div style={{ overflowX: 'auto' }}>
-									<table style={{ width: '100%', borderCollapse: 'collapse' }}>
-										<thead>
-											<tr style={{ background: '#f5f5f5' }}>
-												<th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Адрес</th>
-												<th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Тип</th>
-												<th style={{ padding: '12px', textAlign: 'right', borderBottom: '1px solid #ddd' }}>Баланс (лапортов)</th>
-												<th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Последнее обновление</th>
-											</tr>
-										</thead>
-										<tbody>
-											{balances.map((balance) => (
-												<tr key={balance.address} style={{ borderBottom: '1px solid #eee' }}>
-													<td style={{ padding: '12px', fontFamily: 'monospace', fontSize: '14px' }}>
-														{formatAddress(balance.address)}
-													</td>
-													<td style={{ padding: '12px' }}>
-														{balance.user_type === 'counterparty' ? 'Контрагент' : balance.user_type}
-													</td>
-													<td style={{
-														padding: '12px',
-														textAlign: 'right',
-														fontWeight: 'bold',
-														color: balance.balance >= 0 ? '#4caf50' : '#f44336'
-													}}>
-														{balance.balance.toLocaleString()}
-													</td>
-													<td style={{ padding: '12px' }}>{formatDate(balance.updated_at)}</td>
-												</tr>
-											))}
-										</tbody>
-									</table>
-								</div>
-							)}
-						</div>
-					)}
-				</div>
-			)}
 		</div>
 	)
 }
+
+
+
+
 
 

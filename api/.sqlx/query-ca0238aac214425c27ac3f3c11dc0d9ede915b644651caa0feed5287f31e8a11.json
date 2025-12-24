@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO withdrawals (participant, amount, status, nonce) VALUES ($1, $2, 'pending', $3) RETURNING id",
+  "query": "INSERT INTO withdrawals (participant, amount, status, nonce, tx_signature, pda) VALUES ($1, $2, 'pending', $3, $4, $5) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,14 @@
       "Left": [
         "Text",
         "Int8",
-        "Int8"
+        "Int8",
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "a6507e620985ca75b2fed1d08a583845c362b78f880fe4dddf7e667a4f4a0349"
+  "hash": "ca0238aac214425c27ac3f3c11dc0d9ede915b644651caa0feed5287f31e8a11"
 }

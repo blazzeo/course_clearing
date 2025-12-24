@@ -1,4 +1,4 @@
-use crate::models::Position;
+use crate::models::{Position, SystemSetting};
 use sqlx::{
     migrate::{MigrateError, Migrator},
     PgPool, Pool, Postgres,
@@ -68,4 +68,34 @@ pub async fn collect_confirmed_positions(
     .await?;
 
     Ok(res)
+}
+
+pub async fn update_system_settings(
+    pool: &Pool<Postgres>,
+    key: &str,
+    value: &str,
+    desc: &Option<String>,
+) -> Result<SystemSetting, sqlx::Error> {
+    sqlx::query_as::<_, SystemSetting>(
+        r#"
+        INSERT INTO system_settings (key, value, description)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (key) DO UPDATE SET
+            value = EXCLUDED.value,
+            description = EXCLUDED.description,
+            updated_at = NOW()
+        RETURNING *
+        "#,
+    )
+    .bind(key)
+    .bind(value)
+    .bind(desc)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn get_system_settings(pool: &Pool<Postgres>) -> Result<Vec<SystemSetting>, sqlx::Error> {
+    sqlx::query_as::<_, SystemSetting>("SELECT * FROM system_settings ORDER BY key")
+        .fetch_all(pool)
+        .await
 }

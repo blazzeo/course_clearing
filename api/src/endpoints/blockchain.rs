@@ -2,9 +2,10 @@ use super::log::log_audit_action;
 use crate::auth_service::require_auth;
 use crate::models::{
     ApiResponse, ApproveWithdrawalRequest, BlockchainBalanceResponse, CompleteWithdrawalRequest,
-    DepositFundsRequest, WithdrawalRequest,
+    ConfirmWithdrawalRequest, DepositFundsRequest, WithdrawalRequest,
 };
 use actix_web::{web, HttpResponse, Responder};
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
 use std::{str::FromStr, sync::Arc};
@@ -88,8 +89,33 @@ pub async fn deposit_funds(
     })))
 }
 
+// #[derive(Serialize, Deserialize)]
+// pub struct DepositSuccessfulRequest {
+//     pub address: String,
+//     pub amount: i64,
+// }
+//
+// pub async fn deposit_successful(
+//     pool: web::Data<PgPool>,
+//     req: web::Json<DepositSuccessfulRequest>,
+// ) -> impl Responder {
+//     let user_address = &req.address;
+//     let deposit_amount = req.amount;
+//
+//     sqlx::query(
+//         r#"
+//
+//         "#,
+//     )
+//     .execute(pool)
+//     .await;
+//
+//     HttpResponse::Ok().finish()
+// }
+
 /// Запрос на вывод средств
-pub async fn request_withdrawal(
+/// Создание инструкции для запроса вывода средств (без сохранения в БД)
+pub async fn request_withdrawal_instruction(
     pool: web::Data<PgPool>,
     blockchain_client: web::Data<Arc<crate::blockchain::BlockchainClient>>,
     req: web::Json<WithdrawalRequest>,
@@ -98,7 +124,7 @@ pub async fn request_withdrawal(
     let user_address = match query.get("address") {
         Some(addr) => {
             tracing::info!(
-                "Request withdrawal started for address: {}, amount: {}",
+                "Request withdrawal instruction for address: {}, amount: {}",
                 addr,
                 req.amount
             );
@@ -175,29 +201,6 @@ pub async fn request_withdrawal(
         )));
     }
 
-    // Проверяем, нет ли уже активного запроса на вывод
-    let existing_withdrawal = sqlx::query!(
-        "SELECT id FROM withdrawals WHERE participant = $1 AND status IN ('pending', 'approved')",
-        user_address
-    )
-    .fetch_optional(pool.get_ref())
-    .await;
-
-    match existing_withdrawal {
-        Ok(Some(_)) => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "You already have an active withdrawal request. Please wait for it to be processed.".to_string(),
-            ));
-        }
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "Database error: {}",
-                e
-            )))
-        }
-        _ => {} // Продолжаем
-    }
-
     // Создаем инструкцию для запроса вывода
     tracing::info!("Creating withdrawal instruction for user: {}", user_address);
     let instruction = match blockchain_client
@@ -223,6 +226,51 @@ pub async fn request_withdrawal(
         }
     };
 
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "instruction": {
+            "program_id": instruction.program_id.to_string(),
+            "accounts": instruction.accounts.iter().map(|acc| {
+                serde_json::json!({
+                    "pubkey": acc.pubkey.to_string(),
+                    "is_signer": acc.is_signer,
+                    "is_writable": acc.is_writable,
+                })
+            }).collect::<Vec<_>>(),
+            "data": instruction.data,
+        },
+        "amount": req.amount,
+        "message": "Use this instruction data to create and sign a transaction on the frontend"
+    })))
+}
+
+/// Подтверждение успешного создания запроса на вывод средств (сохранение в БД)
+pub async fn confirm_withdrawal(
+    pool: web::Data<PgPool>,
+    req: web::Json<ConfirmWithdrawalRequest>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let user_address = match query.get("address") {
+        Some(addr) => {
+            tracing::info!(
+                "Confirming withdrawal for address: {}, amount: {}, tx_signature: {}",
+                addr,
+                req.amount,
+                req.tx_signature
+            );
+            addr
+        }
+        None => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "address parameter required".to_string(),
+            ))
+        }
+    };
+
+    // Проверяем авторизацию
+    if let Err(resp) = require_auth(&pool, user_address, "confirm_withdrawal").await {
+        return resp;
+    }
+
     // Получаем текущий nonce из количества withdrawals для этого участника
     let current_nonce = match sqlx::query!(
         "SELECT COUNT(*) as count FROM withdrawals WHERE participant = $1",
@@ -239,39 +287,50 @@ pub async fn request_withdrawal(
         }
     };
 
+    tracing::info!(
+        "Confirm withdrawal - calculated nonce: {}, PDA will be calculated as: find_program_address([b\"withdrawal\", {}, {}], {})",
+        current_nonce,
+        user_address,
+        format!("{:?}", (current_nonce as u64).to_le_bytes()),
+        "PROGRAM_ID"
+    );
+
     // Сохраняем запрос на вывод в базу данных
-    let _withdrawal_result = sqlx::query!(
-        "INSERT INTO withdrawals (participant, amount, status, nonce) VALUES ($1, $2, 'pending', $3) RETURNING id",
+    let withdrawal_result = sqlx::query!(
+        "INSERT INTO withdrawals (participant, amount, status, nonce, tx_signature, pda) VALUES ($1, $2, 'pending', $3, $4, $5) RETURNING id",
         user_address,
         req.amount,
-        current_nonce
+        current_nonce,
+        req.tx_signature,
+        req.pda
     )
     .fetch_one(pool.get_ref())
     .await;
 
-    // let withdrawal_id = match withdrawal_result {
-    //     Ok(record) => record.id,
-    //     Err(e) => {
-    //         return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-    //             format!("Failed to save withdrawal request: {}", e),
-    //         ));
-    //     }
-    // };
+    let withdrawal_id = match withdrawal_result {
+        Ok(record) => record.id,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("Failed to save withdrawal request: {}", e),
+            ));
+        }
+    };
+
+    // Логируем создание запроса на вывод
+    let _ = log_audit_action(
+        &pool,
+        user_address,
+        "confirm_withdrawal",
+        "withdrawal",
+        Some(&withdrawal_id.to_string()),
+        None,
+        Some(serde_json::json!({"status": "pending", "amount": req.amount, "tx_signature": req.tx_signature})),
+    )
+    .await;
 
     HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-        "instruction": {
-            "program_id": instruction.program_id.to_string(),
-            "accounts": instruction.accounts.iter().map(|acc| {
-                serde_json::json!({
-                    "pubkey": acc.pubkey.to_string(),
-                    "is_signer": acc.is_signer,
-                    "is_writable": acc.is_writable,
-                })
-            }).collect::<Vec<_>>(),
-            "data": instruction.data,
-        },
-        "amount": req.amount,
-        "message": "Use this instruction data to create and sign a transaction on the frontend"
+        "withdrawal_id": withdrawal_id,
+        "message": "Withdrawal request confirmed and saved to database"
     })))
 }
 
@@ -332,6 +391,12 @@ pub async fn approve_withdrawal(
     req: web::Json<ApproveWithdrawalRequest>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
+    tracing::info!(
+        "Approving withdrawal for address: {}, withdrawal_id: {:?}",
+        req.withdrawal_address,
+        req.withdrawal_id
+    );
+
     let admin_address = match query.get("admin_address") {
         Some(addr) => addr,
         None => {
@@ -369,13 +434,14 @@ pub async fn approve_withdrawal(
         id: i32,
         status: String,
         nonce: Option<i64>,
+        pda: String,
     }
 
     let withdrawal_record = if let Some(withdrawal_id) = req.withdrawal_id {
         // Используем указанный ID
         match sqlx::query_as!(
             WithdrawalRecord,
-            "SELECT id, status, nonce FROM withdrawals WHERE id = $1 AND participant = $2",
+            "SELECT id, status, nonce, pda FROM withdrawals WHERE id = $1 AND participant = $2",
             withdrawal_id,
             req.withdrawal_address
         )
@@ -398,7 +464,7 @@ pub async fn approve_withdrawal(
         // Ищем pending withdrawal
         match sqlx::query_as!(
             WithdrawalRecord,
-            "SELECT id, status, nonce FROM withdrawals WHERE participant = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, status, nonce, pda FROM withdrawals WHERE participant = $1 AND status = 'pending' ORDER BY requested_at DESC LIMIT 1",
             req.withdrawal_address
         )
         .fetch_optional(pool.get_ref())
@@ -443,7 +509,7 @@ pub async fn approve_withdrawal(
             &withdrawal_pubkey,
             &withdrawal_pubkey,
             &admin_pubkey,
-            withdrawal_record.nonce.unwrap_or(0),
+            withdrawal_record.pda, // req.withdrawal_id.unwrap_or(0) as i64,
         )
         .await
     {

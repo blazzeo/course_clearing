@@ -66,6 +66,25 @@ export default function Profile() {
 			const { blockhash } = await connection.getRecentBlockhash()
 			tx.recentBlockhash = blockhash
 
+			// Симуляция транзакции перед отправкой
+			console.log('Симуляция транзакции...')
+			const simulationResult = await connection.simulateTransaction(tx)
+			console.log('Результат симуляции:', simulationResult)
+
+			if (simulationResult.value.err) {
+				console.error('Ошибка симуляции:', simulationResult.value.err)
+				console.error('Логи симуляции:', simulationResult.value.logs)
+				toast.error(`Ошибка симуляции: ${simulationResult.value.err}`)
+				return
+			}
+
+			if (simulationResult.value.logs) {
+				console.log('Логи транзакции:', simulationResult.value.logs)
+				simulationResult.value.logs.forEach((log, index) => {
+					console.log(`Лог ${index}:`, log)
+				})
+			}
+
 			const signature = await sendTransaction(tx, connection)
 			toast.success(`Инициализация в блокчейне завершена! Транзакция: ${signature}`)
 
@@ -288,10 +307,6 @@ export default function Profile() {
 							<div>
 								{profile.is_active ? 'Активен' : 'Деактивирован'}
 							</div>
-						</div>
-						<div>
-							<label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Баланс:</label>
-							<div>{profile.balance} лампортов</div>
 						</div>
 					</div>
 				</div>

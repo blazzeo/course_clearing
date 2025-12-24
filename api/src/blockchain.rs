@@ -14,7 +14,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "3rvGc7JMV8kNPCXcrCyjbtQjkDr5aHE4C9d4B8hBuLrr";
+const PROGRAM_ID: &str = "CqGLe8rkRRdubZ1M4nBo5MAxxwWM1HT4anVxb9diaE9V";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {
@@ -250,17 +250,34 @@ impl BlockchainClient {
         withdrawal_authority: &Pubkey,
         recipient: &Pubkey,
         admin_authority: &Pubkey,
-        withdrawal_nonce: i64,
+        pda: String, // withdrawal_nonce: i64,
     ) -> Result<Instruction> {
-        let withdrawal_pda = Pubkey::find_program_address(
-            &[
-                b"withdrawal",
-                withdrawal_authority.as_ref(),
-                &(withdrawal_nonce as u64).to_le_bytes(),
-            ],
-            &self.program_id,
-        )
-        .0;
+        tracing::info!(
+            "Creating approve withdrawal instruction for withdrawal_authority: {}, recipient: {}, admin: {}, pda: {}",
+            withdrawal_authority,
+            recipient,
+            admin_authority,
+            pda
+        );
+
+        let withdrawal_pda = Pubkey::from_str_const(&pda);
+
+        //     Pubkey::find_program_address(
+        //     &[
+        //         b"withdrawal",
+        //         withdrawal_authority.as_ref(),
+        //         &(withdrawal_nonce as u64).to_le_bytes(),
+        //     ],
+        //     &self.program_id,
+        // )
+        // .0;
+
+        tracing::info!(
+            "Approve withdrawal - calculated withdrawal PDA: {} (authority: {}, pda: {})",
+            withdrawal_pda,
+            withdrawal_authority,
+            pda
+        );
         let (participant_pda, _participant_bump) =
             self.get_participant_pda(withdrawal_authority).await;
         let (escrow_pda, _escrow_bump) = self.get_escrow_pda().await;

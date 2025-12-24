@@ -1,4 +1,4 @@
-use crate::{auth_service::require_auth, models::*};
+use crate::{auth_service::require_auth, db, models::*};
 use actix_web::{web, HttpResponse, Responder};
 use sqlx::PgPool;
 
@@ -120,9 +120,7 @@ pub async fn get_system_info(pool: web::Data<PgPool>) -> impl Responder {
 
 /// Получение системных настроек
 pub async fn get_system_settings(pool: web::Data<PgPool>) -> impl Responder {
-    let settings = sqlx::query_as::<_, SystemSetting>("SELECT * FROM system_settings ORDER BY key")
-        .fetch_all(pool.get_ref())
-        .await;
+    let settings = db::get_system_settings(pool.get_ref()).await;
 
     match settings {
         Ok(settings) => HttpResponse::Ok().json(ApiResponse::success(settings)),
@@ -151,22 +149,8 @@ pub async fn update_system_settings(
         return resp;
     }
 
-    let result = sqlx::query_as::<_, SystemSetting>(
-        r#"
-        INSERT INTO system_settings (key, value, description)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (key) DO UPDATE SET
-            value = EXCLUDED.value,
-            description = EXCLUDED.description,
-            updated_at = NOW()
-        RETURNING *
-        "#,
-    )
-    .bind(&req.key)
-    .bind(&req.value)
-    .bind(&req.description)
-    .fetch_one(pool.get_ref())
-    .await;
+    let result =
+        db::update_system_settings(pool.get_ref(), &req.key, &req.value, &req.description).await;
 
     match result {
         Ok(setting) => HttpResponse::Ok().json(ApiResponse::success(setting)),

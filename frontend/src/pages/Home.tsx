@@ -127,30 +127,6 @@ export default function Home() {
 				</div>
 			)}
 
-			<div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '24px', marginTop: '32px' }}>
-				<div className="card">
-					<h2 style={{ marginBottom: '16px', color: '#333' }}>Двусторонний клиринг</h2>
-					<p style={{ color: '#666', marginBottom: '16px' }}>
-						Создавайте клиринговые позиции между двумя участниками.
-						Позиции требуют подтверждения от контрагента перед выполнением расчета.
-					</p>
-					<Link to="/positions/create" className="btn btn-primary" style={{ width: '100%' }}>
-						Создать позицию
-					</Link>
-				</div>
-
-				<div className="card">
-					<h2 style={{ marginBottom: '16px', color: '#333' }}>Многосторонний клиринг</h2>
-					<p style={{ color: '#666', marginBottom: '16px' }}>
-						Выполняйте netting для нескольких участников одновременно.
-						Система автоматически рассчитывает чистые позиции.
-					</p>
-					<Link to="/clearing/multi-party" className="btn btn-primary" style={{ width: '100%' }}>
-						Многосторонний клиринг
-					</Link>
-				</div>
-
-			</div>
 
 			<div className="card" style={{ marginTop: '32px' }}>
 				<h2 style={{ marginBottom: '16px', color: '#333' }}>Как это работает</h2>

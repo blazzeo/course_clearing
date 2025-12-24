@@ -21,7 +21,6 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 	}, [publicKey]);
 
 	const updateUserRole = async () => {
-		console.log("UPDATE USER ROLE")
 		if (!publicKey) {
 			onRoleUpdate('guest');
 			localStorage.setItem('userRole', 'guest');
@@ -31,16 +30,12 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 		try {
 			const userAddress = publicKey.toBase58();
 
-			console.log("BEFORE UPDATE")
-
 			const res = await axios.get(
 				`${API_URL}/api/profile?address=${userAddress}`,
 				{
 					validateStatus: (status) => status === 200 || status === 404
 				}
 			);
-
-			console.log("AFTER UPDATE")
 
 			if (res.status === 404) {
 				await axios.post(`${API_URL}/api/auth/register-guest`, { address: userAddress });
@@ -160,16 +155,6 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 								>
 									Админ панель
 								</Link>
-								<Link
-									to="/clearing/multi-party"
-									style={{
-										textDecoration: 'none',
-										color: location.pathname === '/clearing/multi-party' ? '#667eea' : '#666',
-										fontWeight: location.pathname === '/clearing/multi-party' ? '600' : '400'
-									}}
-								>
-									Клиринг
-								</Link>
 							</>
 						)}
 					</div>
@@ -213,9 +198,4 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 		</div >
 	)
 }
-
-
-
-
-
 

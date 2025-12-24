@@ -55,6 +55,7 @@ impl UserRole {
                     | "deposit_funds"
                     | "request_withdrawal"
                     | "view_withdrawals"
+                    | "confirm_withdrawal"
             ),
             UserRole::Auditor => matches!(
                 action,
@@ -64,6 +65,7 @@ impl UserRole {
                     | "view_all_positions"
                     | "view_balances"
                     | "audit_system"
+                    | "view_audit_log"
             ),
             UserRole::Administrator => true, // Администраторы имеют все права
         }

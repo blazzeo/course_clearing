@@ -1,7 +1,9 @@
+use std::fmt::Debug;
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("7g1DKsrECqRs2Ecy1zRvNyUwQocLJ2VAY8C8xZ7D9bVE");
+declare_id!("CqGLe8rkRRdubZ1M4nBo5MAxxwWM1HT4anVxb9diaE9V");
 
 #[program]
 pub mod clearing_service {
@@ -12,6 +14,7 @@ pub mod clearing_service {
         let participant = &mut ctx.accounts.participant;
         participant.authority = ctx.accounts.authority.key();
         participant.balance = 0;
+        participant.withdrawal_nonce = 0;
         participant.bump = ctx.bumps.participant;
 
         msg!("Participant initialized: {}", ctx.accounts.authority.key());
@@ -56,6 +59,7 @@ pub mod clearing_service {
     pub fn request_withdrawal(ctx: Context<RequestWithdrawal>, amount: u64) -> Result<()> {
         let participant = &mut ctx.accounts.participant;
         let withdrawal = &mut ctx.accounts.withdrawal;
+        let current_time = Clock::get()?.unix_timestamp;
 
         require!(
             participant.authority == ctx.accounts.authority.key(),
@@ -66,26 +70,38 @@ pub mod clearing_service {
             ClearingError::InsufficientFunds
         );
 
+        // Сохраняем текущий nonce для использования в seeds
+        let current_nonce = participant.withdrawal_nonce;
+
+        // Увеличиваем nonce для следующего withdrawal
+        participant.withdrawal_nonce = current_nonce.checked_add(1).unwrap();
+
         // Создаем запрос на вывод
         withdrawal.participant = participant.authority;
         withdrawal.amount = amount;
         withdrawal.status = WithdrawalStatus::Pending;
-        withdrawal.requested_at = Clock::get()?.unix_timestamp;
+        withdrawal.requested_at = current_time;
+        withdrawal.nonce = current_nonce; // Сохраняем использованный nonce
         withdrawal.bump = ctx.bumps.withdrawal;
 
         msg!(
             "Withdrawal requested: {} lamports by {}",
             amount,
-            ctx.accounts.authority.key()
+            ctx.accounts.authority.key(),
         );
         Ok(())
     }
 
-    /// Администратор утверждает вывод средств
+    /// Администратор утверждает вывод средств и переводит деньги
     pub fn approve_withdrawal(ctx: Context<ApproveWithdrawal>) -> Result<()> {
         let withdrawal = &mut ctx.accounts.withdrawal;
         let participant = &mut ctx.accounts.participant;
         let escrow = &mut ctx.accounts.escrow;
+
+        msg!(
+            "Withdrawal status before approval check: {:?}",
+            withdrawal.status
+        );
 
         require!(
             withdrawal.status == WithdrawalStatus::Pending,
@@ -98,32 +114,6 @@ pub mod clearing_service {
             ClearingError::InsufficientFunds
         );
 
-        // Обновляем статусы
-        withdrawal.status = WithdrawalStatus::Approved;
-        withdrawal.approved_at = Clock::get()?.unix_timestamp;
-
-        // Снимаем средства с баланса участника
-        participant.balance -= withdrawal.amount as i64;
-        escrow.total_locked -= withdrawal.amount as i64;
-
-        msg!(
-            "Withdrawal approved: {} lamports for {}",
-            withdrawal.amount,
-            withdrawal.participant
-        );
-        Ok(())
-    }
-
-    /// Финализация вывода средств (перевод на кошелек пользователя)
-    pub fn finalize_withdrawal(ctx: Context<FinalizeWithdrawal>) -> Result<()> {
-        let withdrawal = &mut ctx.accounts.withdrawal;
-        let escrow = &mut ctx.accounts.escrow;
-
-        require!(
-            withdrawal.status == WithdrawalStatus::Approved,
-            ClearingError::InvalidWithdrawalStatus
-        );
-
         // Перевод средств с escrow на кошелек пользователя
         **escrow.to_account_info().try_borrow_mut_lamports()? -= withdrawal.amount;
         **ctx
@@ -132,11 +122,17 @@ pub mod clearing_service {
             .to_account_info()
             .try_borrow_mut_lamports()? += withdrawal.amount;
 
+        // Обновляем статусы
         withdrawal.status = WithdrawalStatus::Completed;
-        withdrawal.completed_at = Clock::get()?.unix_timestamp;
+        withdrawal.approved_at = Clock::get()?.unix_timestamp;
+        withdrawal.completed_at = withdrawal.approved_at;
+
+        // Снимаем средства с баланса участника
+        participant.balance -= withdrawal.amount as i64;
+        escrow.total_locked -= withdrawal.amount as i64;
 
         msg!(
-            "Withdrawal finalized: {} lamports to {}",
+            "Withdrawal completed: {} lamports transferred to {}",
             withdrawal.amount,
             ctx.accounts.recipient.key()
         );
@@ -153,6 +149,21 @@ pub mod clearing_service {
         msg!("Escrow initialized by {}", ctx.accounts.authority.key());
         Ok(())
     }
+
+    /// Utility to get last participant's withdrawal nonce
+    pub fn get_withdrawal_nonce(ctx: Context<GetWithdrawalNonce>) -> Result<u64> {
+        Ok(ctx.accounts.participant.withdrawal_nonce)
+    }
+}
+
+#[derive(Accounts)]
+pub struct GetWithdrawalNonce<'info> {
+    #[account(
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
+        bump = participant.bump
+    )]
+    pub participant: Account<'info, Participant>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -161,7 +172,7 @@ pub struct InitializeParticipant<'info> {
         init,
         payer = authority,
         space = 8 + Participant::LEN,
-        seeds = [b"participant", authority.key().as_ref()],
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
         bump
     )]
     pub participant: Account<'info, Participant>,
@@ -175,7 +186,7 @@ pub struct InitializeParticipant<'info> {
 pub struct DepositFunds<'info> {
     #[account(
         mut,
-        seeds = [b"participant", authority.key().as_ref()],
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
         bump = participant.bump
     )]
     pub participant: Account<'info, Participant>,
@@ -193,7 +204,8 @@ pub struct DepositFunds<'info> {
 #[derive(Accounts)]
 pub struct RequestWithdrawal<'info> {
     #[account(
-        seeds = [b"participant", authority.key().as_ref()],
+        mut,
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
         bump = participant.bump
     )]
     pub participant: Account<'info, Participant>,
@@ -201,7 +213,7 @@ pub struct RequestWithdrawal<'info> {
         init,
         payer = authority,
         space = 8 + Withdrawal::LEN,
-        seeds = [b"withdrawal", authority.key().as_ref()],
+        seeds = [b"withdrawal", authority.key().as_ref(), &participant.withdrawal_nonce.to_le_bytes()],
         bump
     )]
     pub withdrawal: Account<'info, Withdrawal>,
@@ -216,7 +228,7 @@ pub struct ApproveWithdrawal<'info> {
     pub withdrawal: Account<'info, Withdrawal>,
     #[account(
         mut,
-        seeds = [b"participant", withdrawal.participant.as_ref()],
+        seeds = [b"participant", withdrawal.participant.as_ref(), &[1]],
         bump = participant.bump
     )]
     pub participant: Account<'info, Participant>,
@@ -226,6 +238,8 @@ pub struct ApproveWithdrawal<'info> {
         bump = escrow.bump
     )]
     pub escrow: Account<'info, Escrow>,
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
     pub authority: Signer<'info>,
 }
 
@@ -251,13 +265,13 @@ pub struct FinalizeWithdrawal<'info> {
 pub struct FinalizeClearingSettlement<'info> {
     #[account(
         mut,
-        seeds = [b"participant", participant_from.authority.as_ref()],
+        seeds = [b"participant", participant_from.authority.as_ref(), &[1]],
         bump = participant_from.bump
     )]
     pub participant_from: Account<'info, Participant>,
     #[account(
         mut,
-        seeds = [b"participant", participant_to.authority.as_ref()],
+        seeds = [b"participant", participant_to.authority.as_ref(), &[1]],
         bump = participant_to.bump
     )]
     pub participant_to: Account<'info, Participant>,
@@ -284,10 +298,11 @@ pub struct Participant {
     pub authority: Pubkey,
     pub balance: i64,
     pub bump: u8,
+    pub withdrawal_nonce: u64,
 }
 
 impl Participant {
-    pub const LEN: usize = 32 + 8 + 1; // authority + balance + bump
+    pub const LEN: usize = 32 + 8 + 1 + 8; // authority + balance + bump + withdrawal_nonce
 }
 
 #[account]
@@ -309,14 +324,15 @@ pub struct Withdrawal {
     pub requested_at: i64,
     pub approved_at: i64,
     pub completed_at: i64,
+    pub nonce: u64,
     pub bump: u8,
 }
 
 impl Withdrawal {
-    pub const LEN: usize = 32 + 8 + 1 + 8 + 8 + 8 + 1; // participant + amount + status + requested_at + approved_at + completed_at + bump
+    pub const LEN: usize = 32 + 8 + 1 + 8 + 8 + 8 + 8 + 1; // participant + amount + status + requested_at + approved_at + completed_at + nonce + bump
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum WithdrawalStatus {
     Pending,
     Approved,

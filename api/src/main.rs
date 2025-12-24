@@ -191,7 +191,11 @@ async fn main() -> std::io::Result<()> {
                     )
                     .route(
                         "/blockchain/withdraw/request",
-                        web::post().to(endpoints::blockchain::request_withdrawal),
+                        web::post().to(endpoints::blockchain::request_withdrawal_instruction),
+                    )
+                    .route(
+                        "/blockchain/withdraw/confirm",
+                        web::post().to(endpoints::blockchain::confirm_withdrawal),
                     )
                     .route(
                         "/blockchain/withdraw/approve",

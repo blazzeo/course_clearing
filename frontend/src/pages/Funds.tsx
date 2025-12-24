@@ -52,9 +52,48 @@ export default function Funds() {
 	}
 
 	const loadWithdrawalRequests = async () => {
-		// В будущем здесь можно загрузить активные запросы на вывод
-		// Пока оставим пустым
-		setWithdrawalRequests([])
+		if (!publicKey) {
+			toast.error('Подключите кошелек');
+			return;
+		}
+
+		try {
+			setLoading(true)
+			const response = await axios.get(`${API_URL}/api/blockchain/withdrawals?address=${publicKey.toBase58()}`)
+			if (response.data.success) {
+				setWithdrawalRequests(response.data.data)
+			}
+		} catch (error) {
+			console.error('Error loading withdrawals:', error)
+			toast.error('Ошибка загрузки запросов на вывод')
+		} finally {
+			setLoading(false)
+		}
+	}
+
+	const deleteWithdrawalRequests = async (id: number) => {
+		if (!publicKey) {
+			toast.error('Подключите кошелек');
+			return;
+		}
+
+		try {
+			setLoading(true)
+
+			const response = await axios.delete(
+				`${API_URL}/api/blockchain/withdrawals?address=${publicKey.toBase58()}&id=${id}`
+			)
+
+			if (response.data.success) {
+				toast.success('Запрос успешно удален')
+			}
+		} catch (error) {
+			console.error('Error loading withdrawals:', error)
+			toast.error('Ошибка при удалении запроса на вывод')
+		} finally {
+			await loadWithdrawalRequests()
+			setLoading(false)
+		}
 	}
 
 	const handleDeposit = async () => {
@@ -92,42 +131,39 @@ export default function Funds() {
 				data: new Uint8Array(instructionData.data) as Buffer,
 			});
 
-			//	 TEST
-			const connection = new Connection(RPC_URL, "confirmed");
-
-			const tx = new Transaction().add(ix);
-			tx.feePayer = publicKey;
+			const connection = new Connection(RPC_URL);
 
 			const { blockhash } = await connection.getLatestBlockhash();
+
+			const tx = new Transaction();
+
+			tx.feePayer = publicKey;
 			tx.recentBlockhash = blockhash;
 
-			// ⬇️ ВАЖНО
-			const sim = await connection.simulateTransaction(tx);
+			tx.add(ix);
 
-			console.log("Simulation logs:", sim.value.logs);
-			console.log("Simulation err:", sim.value.err);
+			// Симуляция транзакции перед отправкой
+			console.log('Симуляция транзакции...')
+			const simulationResult = await connection.simulateTransaction(tx)
+			console.log('Результат симуляции:', simulationResult)
 
-			if (sim.value.err) {
-				throw new Error("Simulation failed");
+			if (simulationResult.value.err) {
+				console.error('Ошибка симуляции:', simulationResult.value.err)
+				console.error('Логи симуляции:', simulationResult.value.logs)
+				toast.error(`Ошибка симуляции: ${simulationResult.value.err}`)
+				return
 			}
-			//	TEST
 
+			if (simulationResult.value.logs) {
+				console.log('Логи транзакции:', simulationResult.value.logs)
+				simulationResult.value.logs.forEach((log, index) => {
+					console.log(`Лог ${index}:`, log)
+				})
+			}
 
-			//
-			// const connection = new Connection(RPC_URL);
-			//
-			// const { blockhash } = await connection.getLatestBlockhash();
-			//
-			// const tx = new Transaction();
-			//
-			// tx.feePayer = publicKey;
-			// tx.recentBlockhash = blockhash;
-			//
-			// tx.add(ix);
-			//
-			// const sig = await sendTransaction(tx, connection);
+			const sig = await sendTransaction(tx, connection);
 
-			// toast.success(`Транзакция отправлена! Sig: ${sig}`);
+			toast.success(`Транзакция отправлена! Sig: ${sig}`);
 			loadBalance();
 			setDepositAmount('');
 		} catch (error: any) {
@@ -144,10 +180,12 @@ export default function Funds() {
 			return;
 		}
 		const amount = parseFloat(withdrawalAmount);
+
 		if (!amount || amount <= 0) {
 			toast.error('Введите корректную сумму');
 			return;
 		}
+
 		try {
 			setActionLoading(true);
 			// 1. Получаем инструкцию вывода от API
@@ -155,7 +193,9 @@ export default function Funds() {
 				`${API_URL}/api/blockchain/withdraw/request?address=${publicKey.toBase58()}`,
 				{ amount: Math.round(amount * 1e9) }
 			);
+
 			if (!resp.data.success) throw new Error(resp.data.error || 'Ошибка вывода');
+
 			const instructionData = resp.data.data.instruction;
 
 			const ix = new TransactionInstruction({
@@ -165,7 +205,7 @@ export default function Funds() {
 					isSigner: acc.is_signer,
 					isWritable: acc.is_writable
 				})),
-				data: Uint8Array.from(instructionData.data.data) as Buffer,
+				data: Uint8Array.from(instructionData.data) as Buffer,
 			});
 
 			const connection = new Connection(RPC_URL);
@@ -178,12 +218,35 @@ export default function Funds() {
 
 			tx.add(ix);
 
+			const sim = await connection.simulateTransaction(tx);
+			console.log('[CLIENT] Simulation result - logs:', sim.value.logs);
+			console.log('[CLIENT] Simulation result - error:', sim.value.err);
+
 			const sig = await sendTransaction(tx, connection);
-			toast.success(`Запрос отправлен! Sig: ${sig}`);
+
+			// 2. Подтверждаем успешное выполнение и сохраняем в БД
+			const confirmResp = await axios.post(
+				`${API_URL}/api/blockchain/withdraw/confirm?address=${publicKey.toBase58()}`,
+				{
+					amount: Math.round(amount * 1e9),
+					tx_signature: sig
+				}
+			);
+
+			if (!confirmResp.data.success) {
+				console.error('[CLIENT] Failed to confirm withdrawal:', confirmResp.data.error);
+				toast.warning('Транзакция выполнена, но не удалось сохранить в БД');
+			} else {
+				console.log('[CLIENT] Withdrawal confirmed in database');
+			}
+
+			toast.success(`Запрос на вывод отправлен! Sig: ${sig}`);
 			loadBalance();
+			loadWithdrawalRequests(); // Обновляем список запросов
 			setWithdrawalAmount('');
 		} catch (error: any) {
-			console.error('Withdrawal error:', error);
+			console.error('[CLIENT] Withdrawal error:', error);
+			console.error('[CLIENT] Error details:', error.response?.data || error.message);
 			toast.error(error.message || 'Ошибка запроса на вывод');
 		} finally {
 			setActionLoading(false);
@@ -196,7 +259,7 @@ export default function Funds() {
 
 	return (
 		<div style={{ maxWidth: '800px', margin: '0 auto' }}>
-			<h1>Управление средствами</h1>
+			<h1 style={{ color: 'white', marginBottom: '20px' }}>Управление средствами</h1>
 
 			{/* Баланс */}
 			<div className="card" style={{ marginBottom: '24px' }}>
@@ -314,6 +377,7 @@ export default function Funds() {
 									<th>Сумма</th>
 									<th>Статус</th>
 									<th>Дата запроса</th>
+									<th>Дейтвия</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -332,6 +396,14 @@ export default function Funds() {
 											</span>
 										</td>
 										<td>{request.requested_at ? new Date(request.requested_at).toLocaleString() : '-'}</td>
+										<td>
+											{request.status === 'pending' &&
+												<button onClick={() => deleteWithdrawalRequests(request.id!)}
+													style={{ backgroundColor: '#f44336', color: 'white', padding: '3px 8px', borderColor: 'transparent', borderRadius: '5px' }}>
+													Cancel
+												</button>
+											}
+										</td>
 									</tr>
 								))}
 							</tbody>
