@@ -51,6 +51,7 @@ impl UserRole {
                     | "create_position"
                     | "cancel_position"
                     | "view_own_positions"
+                    | "view_own_settlements"
                     | "update_profile"
                     | "deposit_funds"
                     | "request_withdrawal"

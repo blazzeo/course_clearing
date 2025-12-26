@@ -18,6 +18,25 @@ interface WithdrawalRequest {
 	requested_at?: string
 }
 
+interface OutstandingFee {
+	id: number
+	participant_address: string
+	amount: number
+	reason: string
+	session_id?: number
+	settlement_id?: number
+	created_at: string
+	status: string
+}
+
+interface ParticipantStatus {
+	address: string
+	balance: number
+	outstanding_fees: number
+	is_blocked: boolean
+	total_debt: number
+}
+
 export default function Funds() {
 	const { publicKey, sendTransaction } = useWallet()
 	const [balance, setBalance] = useState<BlockchainBalance | null>(null)
@@ -26,11 +45,15 @@ export default function Funds() {
 	const [depositAmount, setDepositAmount] = useState('')
 	const [withdrawalAmount, setWithdrawalAmount] = useState('')
 	const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([])
+	const [outstandingFees, setOutstandingFees] = useState<OutstandingFee[]>([])
+	const [participantStatus, setParticipantStatus] = useState<ParticipantStatus | null>(null)
 
 	useEffect(() => {
 		if (publicKey) {
 			loadBalance()
 			loadWithdrawalRequests()
+			loadOutstandingFees()
+			loadParticipantStatus()
 		}
 	}, [publicKey])
 
@@ -71,6 +94,32 @@ export default function Funds() {
 		}
 	}
 
+	const loadOutstandingFees = async () => {
+		if (!publicKey) return
+
+		try {
+			const response = await axios.get(`${API_URL}/api/blockchain/fees/outstanding?address=${publicKey.toBase58()}`)
+			if (response.data.success) {
+				setOutstandingFees(response.data.data)
+			}
+		} catch (error) {
+			console.error('Error loading outstanding fees:', error)
+		}
+	}
+
+	const loadParticipantStatus = async () => {
+		if (!publicKey) return
+
+		try {
+			const response = await axios.get(`${API_URL}/api/blockchain/status?address=${publicKey.toBase58()}`)
+			if (response.data.success) {
+				setParticipantStatus(response.data.data)
+			}
+		} catch (error) {
+			console.error('Error loading participant status:', error)
+		}
+	}
+
 	const deleteWithdrawalRequests = async (id: number) => {
 		if (!publicKey) {
 			toast.error('Подключите кошелек');
@@ -93,6 +142,69 @@ export default function Funds() {
 		} finally {
 			await loadWithdrawalRequests()
 			setLoading(false)
+		}
+	}
+
+	const repayOutstandingFees = async () => {
+		if (!publicKey) {
+			toast.error('Подключите кошелек')
+			return
+		}
+
+		if (!participantStatus || participantStatus.outstanding_fees === 0) {
+			toast.error('У вас нет долгов для погашения')
+			return
+		}
+
+		try {
+			setActionLoading(true)
+
+			// Получаем инструкцию для погашения
+			const response = await axios.post(`${API_URL}/api/blockchain/fees/repay?address=${publicKey.toBase58()}`)
+			if (!response.data.success) throw new Error(response.data.error || 'Ошибка получения инструкции')
+
+			const instructionData = response.data.data.instruction
+
+			if (!Array.isArray(instructionData.data)) {
+				throw new Error('Invalid instruction data format')
+			}
+
+			const ix = new TransactionInstruction({
+				programId: new PublicKey(instructionData.program_id),
+				keys: instructionData.accounts.map((acc: any) => ({
+					pubkey: new PublicKey(acc.pubkey),
+					isSigner: acc.is_signer,
+					isWritable: acc.is_writable
+				})),
+				data: new Uint8Array(instructionData.data) as Buffer,
+			})
+
+			const connection = new Connection(RPC_URL)
+			const { blockhash } = await connection.getLatestBlockhash()
+
+			const tx = new Transaction()
+			tx.feePayer = publicKey
+			tx.recentBlockhash = blockhash
+			tx.add(ix)
+
+			const sig = await sendTransaction(tx, connection)
+
+			// Подтверждаем погашение в базе данных
+			await axios.post(`${API_URL}/api/blockchain/fees/confirm?address=${publicKey.toBase58()}`, {
+				amount: participantStatus.outstanding_fees,
+				tx_signature: sig
+			})
+
+			toast.success(`Долги погашены! Tx: ${sig}`)
+			loadOutstandingFees()
+			loadParticipantStatus()
+			loadBalance()
+
+		} catch (error: any) {
+			console.error('Repay fees error:', error)
+			toast.error(error.message || 'Ошибка погашения долгов')
+		} finally {
+			setActionLoading(false)
 		}
 	}
 
@@ -177,6 +289,11 @@ export default function Funds() {
 	const handleWithdrawalRequest = async () => {
 		if (!publicKey) {
 			toast.error('Подключите кошелек');
+			return;
+		}
+
+		if (participantStatus?.is_blocked) {
+			toast.error('Ваш аккаунт заблокирован из-за долгов по комиссиям. Погасите долги перед выводом средств.');
 			return;
 		}
 		const amount = parseFloat(withdrawalAmount);
@@ -269,7 +386,7 @@ export default function Funds() {
 				{loading ? (
 					<div>Загрузка...</div>
 				) : balance ? (
-					<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+					<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
 						<div style={{ padding: '16px', border: '1px solid #e0e0e0', borderRadius: '8px' }}>
 							<div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4caf50' }}>
 								{(balance.blockchain_balance / 1e9).toFixed(4)} SOL
@@ -280,7 +397,23 @@ export default function Funds() {
 							<div style={{ fontSize: '24px', fontWeight: 'bold', color: '#2196f3' }}>
 								{balance.contract_balance ? (balance.contract_balance / 1e9).toFixed(4) + ' SOL' : 'Н/Д'}
 							</div>
-							<div style={{ color: '#666' }}>Заблокировано в контракте</div>
+							<div style={{ color: '#666' }}>Депозит</div>
+						</div>
+						<div style={{ padding: '16px', border: participantStatus?.is_blocked ? '2px solid #f44336' : '1px solid #e0e0e0', borderRadius: '8px', background: participantStatus?.is_blocked ? '#ffebee' : 'white' }}>
+							<div style={{ fontSize: '24px', fontWeight: 'bold', color: participantStatus?.is_blocked ? '#f44336' : '#ff9800' }}>
+								{participantStatus ? (participantStatus.outstanding_fees / 1e9).toFixed(4) + ' SOL' : 'Загрузка...'}
+							</div>
+							<div style={{ color: '#666' }}>
+								Долги по комиссиям
+							</div>
+							{participantStatus?.is_blocked && (
+								<div style={{ marginTop: '8px', fontSize: '12px', color: '#f44336', fontWeight: 'bold' }}>
+									⚠️ Операции ограничены
+									<div style={{ fontSize: '11px', marginTop: '2px', color: '#666' }}>
+										Депозит доступен для погашения
+									</div>
+								</div>
+							)}
 						</div>
 					</div>
 				) : (
@@ -325,6 +458,74 @@ export default function Funds() {
 					</button>
 				</div>
 			</div>
+
+			{/* Долги по комиссиям */}
+			{participantStatus && participantStatus.outstanding_fees > 0 && (
+				<div className="card" style={{ marginBottom: '24px', border: participantStatus.is_blocked ? '2px solid #f44336' : '1px solid #ff9800' }}>
+					<h2 style={{ marginBottom: '16px', color: participantStatus.is_blocked ? '#f44336' : '#ff9800' }}>
+						⚠️ Долги по комиссиям
+					</h2>
+					<div style={{ marginBottom: '16px', padding: '12px', background: '#fff3cd', borderRadius: '4px', border: '1px solid #ffeaa7' }}>
+						<strong>Сумма долга: {(participantStatus.outstanding_fees / 1e9).toFixed(4)} SOL</strong>
+						{participantStatus.is_blocked && (
+							<div style={{ marginTop: '8px', color: '#f44336' }}>
+								Ваш аккаунт заблокирован для операций клиринга, оплаты счетов и вывода средств до полного погашения долга.
+								<br />
+								<strong>💡 Депозит доступен для автоматического погашения долгов при следующем пополнении.</strong>
+							</div>
+						)}
+					</div>
+
+					<div style={{ marginBottom: '16px' }}>
+						<h4>Детали долгов:</h4>
+						{outstandingFees.length === 0 ? (
+							<div>Загрузка...</div>
+						) : (
+							<div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+								{outstandingFees.map((fee) => (
+									<div key={fee.id} style={{ padding: '8px', border: '1px solid #e0e0e0', borderRadius: '4px', marginBottom: '8px' }}>
+										<div style={{ display: 'flex', justifyContent: 'space-between' }}>
+											<span><strong>{fee.reason}:</strong> {(fee.amount / 1e9).toFixed(4)} SOL</span>
+											<span style={{ fontSize: '12px', color: '#666' }}>
+												{new Date(fee.created_at).toLocaleDateString()}
+											</span>
+										</div>
+									</div>
+								))}
+							</div>
+						)}
+					</div>
+
+					<div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+						<div style={{ padding: '12px', background: '#e3f2fd', borderRadius: '4px', border: '1px solid #bbdefb' }}>
+							<strong>💡 Автоматическое погашение:</strong> Следующий депозит автоматически погасит долг и разблокирует аккаунт
+						</div>
+
+						<div style={{ display: 'flex', gap: '12px' }}>
+							<button
+								onClick={repayOutstandingFees}
+								disabled={actionLoading}
+								style={{
+									padding: '12px 24px',
+									background: participantStatus.is_blocked ? '#f44336' : '#ff9800',
+									color: 'white',
+									border: 'none',
+									borderRadius: '4px',
+									cursor: actionLoading ? 'not-allowed' : 'pointer',
+									fontSize: '14px',
+									fontWeight: 'bold'
+								}}
+							>
+								{actionLoading ? 'Погашение...' : `Ручное погашение (${(participantStatus.outstanding_fees / 1e9).toFixed(4)} SOL)`}
+							</button>
+
+							<div style={{ padding: '12px', background: '#f5f5f5', borderRadius: '4px', fontSize: '14px', color: '#666' }}>
+								<strong>Рекомендация:</strong> Внесите депозит для автоматического погашения
+							</div>
+						</div>
+					</div>
+				</div>
+			)}
 
 			{/* Запрос на вывод */}
 			<div className="card" style={{ marginBottom: '24px' }}>

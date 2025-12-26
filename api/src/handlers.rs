@@ -125,7 +125,7 @@ pub async fn get_system_settings(pool: web::Data<PgPool>) -> impl Responder {
     match settings {
         Ok(settings) => HttpResponse::Ok().json(ApiResponse::success(settings)),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<Vec<SystemSetting>>::error(e.to_string())),
+            .json(ApiResponse::<SystemSetting>::error(e.to_string())),
     }
 }
 
@@ -149,8 +149,7 @@ pub async fn update_system_settings(
         return resp;
     }
 
-    let result =
-        db::update_system_settings(pool.get_ref(), &req.key, &req.value, &req.description).await;
+    let result = db::update_system_settings(pool.get_ref(), &req).await;
 
     match result {
         Ok(setting) => HttpResponse::Ok().json(ApiResponse::success(setting)),

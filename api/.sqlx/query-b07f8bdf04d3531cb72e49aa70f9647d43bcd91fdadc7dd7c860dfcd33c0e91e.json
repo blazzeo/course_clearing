@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pda FROM withdrawals WHERE pda = $1 AND participant = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pda",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b07f8bdf04d3531cb72e49aa70f9647d43bcd91fdadc7dd7c860dfcd33c0e91e"
+}

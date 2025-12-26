@@ -1,4 +1,3 @@
-mod admin_service;
 mod auth_service;
 mod blockchain;
 mod db;
@@ -212,6 +211,30 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/blockchain/balance",
                         web::get().to(endpoints::blockchain::get_blockchain_balance),
+                    )
+                    .route(
+                        "/blockchain/status",
+                        web::get().to(endpoints::blockchain::get_participant_status),
+                    )
+                    .route(
+                        "/blockchain/fees/outstanding",
+                        web::get().to(endpoints::blockchain::get_outstanding_fees),
+                    )
+                    .route(
+                        "/blockchain/fees/repay",
+                        web::post().to(endpoints::blockchain::create_repay_fees_instruction),
+                    )
+                    .route(
+                        "/blockchain/fees/confirm",
+                        web::post().to(endpoints::blockchain::confirm_fees_repaid),
+                    )
+                    .route(
+                        "/blockchain/clearing/fees/confirm",
+                        web::post().to(endpoints::blockchain::confirm_clearing_fees_collected),
+                    )
+                    .route(
+                        "/blockchain/escrow/balance",
+                        web::get().to(endpoints::blockchain::get_escrow_balance),
                     ),
             )
     })

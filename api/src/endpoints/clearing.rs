@@ -1,10 +1,17 @@
 use super::log::log_audit_action;
-use crate::db::collect_confirmed_positions;
+use crate::blockchain::BlockchainClient;
+use crate::db::{collect_confirmed_positions, create_outstanding_fee};
 use crate::models::{ApiResponse, Position};
 use actix_web::{web, HttpResponse, Responder};
+use serde_json;
 use sqlx::PgPool;
+use std::str::FromStr;
+use std::sync::Arc;
 
-pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
+pub async fn multi_party_clearing(
+    pool: web::Data<PgPool>,
+    blockchain_client: web::Data<Arc<BlockchainClient>>,
+) -> impl Responder {
     use std::collections::HashMap;
 
     // 1. Берём подтверждённые позиции
@@ -44,6 +51,23 @@ pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
         ));
     }
 
+    // 2.5. Проверяем, что все участники не заблокированы
+    for participant_addr in &participants {
+        let is_blocked = blockchain_client
+            .is_participant_blocked(
+                &solana_sdk::pubkey::Pubkey::from_str(&participant_addr).unwrap(),
+            )
+            .await
+            .unwrap_or(false);
+
+        if is_blocked {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
+                "Participant {} is blocked due to outstanding fees",
+                participant_addr
+            )));
+        }
+    }
+
     // 3. Запуск неттинга
     let resp = crate::ledger_engine::netting_clearing(&participants, &amounts);
     if !resp.success {
@@ -78,8 +102,16 @@ pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
         .unwrap();
     }
 
-    // 7. Записываем settlements без tx_signature
+    // 7. Получаем настройки комиссий
+    let clearing_fee_rate = match crate::db::get_system_setting_value(&pool, "clearing_fee").await {
+        Ok(Some(value)) => value as f32,
+        _ => 0.001, // значение по умолчанию
+    };
+
+    // 8. Записываем settlements без tx_signature и создаем инструкции комиссий
     let mut settlement_records = Vec::new();
+    let mut fee_instructions = Vec::new();
+
     for s in &settlements {
         let settlement_id: i32 = sqlx::query!(
             "INSERT INTO settlements (session_id, from_address, to_address, amount, tx_signature)
@@ -100,6 +132,44 @@ pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
             "to_address": s.to_address,
             "amount": s.amount
         }));
+
+        // Создаем инструкцию для взимания комиссии
+        let fee_amount = (s.amount as f64 * clearing_fee_rate as f64) as u64;
+        if fee_amount > 0 {
+            let from_pubkey = solana_sdk::pubkey::Pubkey::from_str(&s.from_address).unwrap();
+
+            tracing::info!(
+                "Creating fee collection instruction: settlement_id={}, from={}, amount={}, fee_amount={}",
+                settlement_id,
+                s.from_address,
+                s.amount,
+                fee_amount
+            );
+
+            let fee_ix = blockchain_client
+                .create_collect_fee_instruction(&from_pubkey, fee_amount, "clearing".to_string())
+                .await
+                .unwrap();
+
+            fee_instructions.push(serde_json::json!({
+                "settlement_id": settlement_id,
+                "from_address": s.from_address,
+                "fee_amount": fee_amount,
+                "instruction": fee_ix
+            }));
+
+            // Создаем запись о потенциальном долге
+            create_outstanding_fee(
+                &pool,
+                &s.from_address,
+                fee_amount as i64,
+                "clearing",
+                Some(session_id),
+                Some(settlement_id),
+            )
+            .await
+            .unwrap();
+        }
     }
 
     // 8. Обновляем позиции → cleared
@@ -131,8 +201,10 @@ pub async fn multi_party_clearing(pool: web::Data<PgPool>) -> impl Responder {
     let response = serde_json::json!({
         "settlements": settlements,
         "settlement_records": settlement_records,
+        "fee_instructions": fee_instructions,
         "session_id": session_id,
-        "message": "Clearing calculated in database. Use settlement records to finalize on blockchain if needed."
+        "clearing_fee_rate": clearing_fee_rate,
+        "message": "Clearing calculated in database. Use settlement records and fee instructions to finalize on blockchain."
     });
 
     HttpResponse::Ok().json(ApiResponse::success(response))

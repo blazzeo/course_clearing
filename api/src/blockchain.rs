@@ -1,8 +1,10 @@
+use crate::models::ParticipantStatus;
 use anchor_lang::{Discriminator, InstructionData};
 use anyhow::{anyhow, Result};
 use clearing_service::{
     instruction::{
-        ApproveWithdrawal, DepositFunds, InitializeEscrow, InitializeParticipant, RequestWithdrawal,
+        ApproveWithdrawal, CollectFee, DepositFunds, InitializeEscrow, InitializeParticipant,
+        RepayOutstandingFees, RequestWithdrawal,
     },
     Participant,
 };
@@ -14,7 +16,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "ARJmooR8RhUjSkYiYBYtDSpPam1khAmYorn2ckmUC9vQ";
+const PROGRAM_ID: &str = "DWdEzx3TPQc4MPSxFJDH4yaS4t8h2sfNw8eGpqCrkB6N";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {
@@ -253,7 +255,7 @@ impl BlockchainClient {
         withdrawal_authority: &Pubkey,
         recipient: &Pubkey,
         admin_authority: &Pubkey,
-        pda: String, // withdrawal_nonce: i64,
+        pda: &str,
     ) -> Result<Instruction> {
         tracing::info!(
             "Creating approve withdrawal instruction for withdrawal_authority: {}, recipient: {}, admin: {}, pda: {}",
@@ -393,5 +395,102 @@ impl BlockchainClient {
             accounts,
             data: vec![], // Anchor сам добавит discriminator для метода
         }
+    }
+
+    /// Создать инструкцию для взимания комиссии с возможностью создания долга
+    pub async fn create_collect_fee_instruction(
+        &self,
+        authority: &Pubkey,
+        amount: u64,
+        reason: String,
+    ) -> Result<Instruction> {
+        let (participant_pda, _) = self.get_participant_pda(authority).await;
+
+        let data = CollectFee { amount, reason }.data();
+
+        let accounts = vec![
+            AccountMeta::new(participant_pda, false),
+            AccountMeta::new(self.get_escrow_pda().await.0, false),
+            AccountMeta::new(*authority, true),
+        ];
+
+        Ok(Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        })
+    }
+
+    /// Создать инструкцию для погашения долгов по комиссиям
+    pub async fn create_repay_fees_instruction(&self, authority: &Pubkey) -> Result<Instruction> {
+        let (participant_pda, _) = self.get_participant_pda(authority).await;
+
+        let data = RepayOutstandingFees {}.data();
+
+        let accounts = vec![
+            AccountMeta::new(participant_pda, false),
+            AccountMeta::new(self.get_escrow_pda().await.0, false),
+            AccountMeta::new(*authority, true),
+        ];
+
+        Ok(Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        })
+    }
+
+    /// Получить статус участника (баланс, долги, блокировка)
+    pub async fn get_participant_status(
+        &self,
+        authority: &Pubkey,
+    ) -> Result<Option<ParticipantStatus>> {
+        let (participant_pda, _) = self.get_participant_pda(authority).await;
+
+        match self.client.get_account(&participant_pda).await {
+            Ok(account) => {
+                if account.data.len() < 8 + 32 + 8 + 8 + 1 + 1 + 8 {
+                    return Ok(None);
+                }
+
+                let data = &account.data[8..]; // Пропускаем discriminator
+                let balance = i64::from_le_bytes(data[32..40].try_into().unwrap());
+                let outstanding_fees = i64::from_le_bytes(data[40..48].try_into().unwrap());
+                let is_blocked = data[48] != 0;
+
+                Ok(Some(ParticipantStatus {
+                    address: authority.to_string(),
+                    balance,
+                    outstanding_fees,
+                    is_blocked,
+                    total_debt: outstanding_fees,
+                }))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Проверить, заблокирован ли участник
+    pub async fn is_participant_blocked(&self, authority: &Pubkey) -> Result<bool> {
+        match self.get_participant_status(authority).await? {
+            Some(status) => Ok(status.is_blocked),
+            None => Ok(false), // Если аккаунт не инициализирован, считаем не заблокированным
+        }
+    }
+
+    /// Получить баланс escrow (общие заблокированные средства и собранные комиссии)
+    pub async fn get_escrow_balance(&self) -> Result<(i64, i64)> {
+        let (escrow_pda, _) = self.get_escrow_pda().await;
+
+        let account = self.client.get_account(&escrow_pda).await?;
+        if account.data.len() < 8 + 32 + 8 + 8 + 1 {
+            return Err(anyhow!("Invalid escrow account data"));
+        }
+
+        let data = &account.data[8..]; // Пропускаем discriminator
+        let total_locked = i64::from_le_bytes(data[32..40].try_into().unwrap());
+        let system_fees_collected = i64::from_le_bytes(data[40..48].try_into().unwrap());
+
+        Ok((total_locked, system_fees_collected))
     }
 }

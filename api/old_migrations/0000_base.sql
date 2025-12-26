@@ -1,5 +1,3 @@
-BEGIN;
-
 -- =====================================================
 -- 1. Создание базовых таблиц
 -- =====================================================
@@ -7,10 +5,10 @@ BEGIN;
 -- Таблица участников
 CREATE TABLE IF NOT EXISTS participants (
     address TEXT UNIQUE PRIMARY KEY,   -- solana address
-    user_type TEXT NOT NULL DEFAULT 'guest'
+    user_type TEXT NOT NULL DEFAULT 'guest' 
         CHECK (user_type IN ('guest', 'counterparty', 'auditor', 'administrator')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
+    
     -- Дополнительные поля (добавляются в миграции 2)
     email TEXT,
     first_name TEXT,
@@ -94,47 +92,12 @@ ALTER TABLE settlements
 -- Таблица системных настроек
 CREATE TABLE IF NOT EXISTS system_settings (
     id SERIAL PRIMARY KEY,
-    -- Правила клиринга
-    clearing_min_participants INTEGER DEFAULT 2,
-    clearing_max_amount BIGINT DEFAULT 1000000,
-    -- Комиссии
-    clearing_fee REAL DEFAULT 0.001,
-    transaction_fee REAL DEFAULT 0.0001,
-    deposit_fee REAL DEFAULT 0.0005,
-    withdrawal_fee REAL DEFAULT 0.002,
-    -- Лимиты
-    daily_transaction_limit BIGINT DEFAULT 10000,
-    monthly_volume_limit BIGINT DEFAULT 100000,
-    -- Время обновления
-    updated_at TIMESTAMP DEFAULT NOW()
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-ALTER TABLE system_settings
-    ALTER COLUMN updated_at TYPE TIMESTAMPTZ
-    USING COALESCE(updated_at AT TIME ZONE 'UTC', NOW());
-
--- Вставляем базовые настройки
-INSERT INTO system_settings (
-    clearing_min_participants,
-    clearing_max_amount,
-    clearing_fee,
-    transaction_fee,
-    deposit_fee,
-    withdrawal_fee,
-    daily_transaction_limit,
-    monthly_volume_limit
-) VALUES (
-    2,          -- clearing_min_participants
-    1000000,    -- clearing_max_amount
-    0.001,      -- clearing_fee
-    0.0001,     -- transaction_fee
-    0.0005,     -- deposit_fee
-    0.002,      -- withdrawal_fee
-    10000,      -- daily_transaction_limit
-    100000      -- monthly_volume_limit
-) ON CONFLICT DO NOTHING;
-
-
 
 -- Таблица аудита действий пользователей
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -155,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);
 
 -- =====================================================
--- 3. Таблица выводов средств (из 0000_base.sql + 0001_alter_withdrawals.sql)
+-- 3. Таблица выводов средств
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS withdrawals (
@@ -168,13 +131,8 @@ CREATE TABLE IF NOT EXISTS withdrawals (
     approved_at TIMESTAMPTZ NULL,        -- время одобрения администратором
     completed_at TIMESTAMPTZ NULL,       -- время выполнения вывода
     tx_signature TEXT NULL,              -- сигнатура транзакции approve_withdrawal
-    nonce BIGINT DEFAULT 0,              -- порядковый номер для предотвращения replay-атак
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    pda TEXT
+    nonce BIGINT DEFAULT 0               -- порядковый номер для предотвращения replay-атак
 );
-
-ALTER TABLE withdrawals
-ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- Индексы для быстрого поиска
 CREATE INDEX IF NOT EXISTS idx_withdrawals_participant ON withdrawals(participant);
@@ -183,68 +141,13 @@ CREATE INDEX IF NOT EXISTS idx_withdrawals_requested_at ON withdrawals(requested
 CREATE INDEX IF NOT EXISTS idx_withdrawals_nonce ON withdrawals(nonce);
 
 -- Ограничение: один активный запрос на вывод на участника
+-- (нельзя иметь несколько pending запросов одновременно)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_withdrawals_active_per_participant
 ON withdrawals(participant)
 WHERE status IN ('pending', 'approved');
 
 -- =====================================================
--- 4. Таблица долгов по комиссиям
--- =====================================================
-
--- Создание enum типа для статуса долга
-DO $$ BEGIN
-    CREATE TYPE fee_status AS ENUM ('outstanding', 'repaid', 'written_off');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- Таблица для отслеживания долгов по комиссиям
-CREATE TABLE IF NOT EXISTS outstanding_fees (
-    id SERIAL PRIMARY KEY,
-    participant_address VARCHAR NOT NULL,
-    amount BIGINT NOT NULL CHECK (amount > 0),
-    reason VARCHAR NOT NULL CHECK (reason IN ('clearing', 'deposit', 'withdrawal')),
-    session_id INTEGER REFERENCES netting_sessions(id),
-    settlement_id INTEGER REFERENCES settlements(id),
-    created_at TIMESTAMP DEFAULT NOW(),
-    repaid_at TIMESTAMP,
-    status fee_status DEFAULT 'outstanding'
-);
-
-ALTER TABLE outstanding_fees
-    ALTER COLUMN created_at TYPE TIMESTAMPTZ
-    USING COALESCE(created_at AT TIME ZONE 'UTC', NOW());
-
-ALTER TABLE outstanding_fees
-    ALTER COLUMN repaid_at TYPE TIMESTAMPTZ
-    USING COALESCE(repaid_at AT TIME ZONE 'UTC', NOW());
-
--- Индексы для быстрого поиска
-CREATE INDEX IF NOT EXISTS idx_outstanding_fees_participant ON outstanding_fees(participant_address);
-CREATE INDEX IF NOT EXISTS idx_outstanding_fees_status ON outstanding_fees(status);
-CREATE INDEX IF NOT EXISTS idx_outstanding_fees_session ON outstanding_fees(session_id);
-CREATE INDEX IF NOT EXISTS idx_outstanding_fees_created ON outstanding_fees(created_at);
-
--- Функция для автоматического обновления repaid_at
-CREATE OR REPLACE FUNCTION update_repaid_at()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.status = 'repaid' AND OLD.status != 'repaid' THEN
-        NEW.repaid_at = NOW();
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Триггер для автоматического обновления repaid_at
-DROP TRIGGER IF EXISTS trigger_update_repaid_at ON outstanding_fees;
-CREATE TRIGGER trigger_update_repaid_at
-    BEFORE UPDATE ON outstanding_fees
-    FOR EACH ROW
-    EXECUTE FUNCTION update_repaid_at();
-
--- =====================================================
--- 5. Функции и триггеры для обновления timestamp (из 0000_base.sql)
+-- 4. Функции и триггеры для обновления timestamp
 -- =====================================================
 
 -- Создаем функцию обновления updated_at
@@ -269,10 +172,59 @@ CREATE TRIGGER update_system_settings_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Триггер для withdrawals
-DROP TRIGGER IF EXISTS update_withdrawals_updated_at ON withdrawals;
-CREATE TRIGGER update_withdrawals_updated_at
+DROP TRIGGER IF EXISTS update_withdrawals_created_at ON withdrawals;
+CREATE TRIGGER update_withdrawals_created_at
     BEFORE UPDATE ON withdrawals
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- =====================================================
+-- 5. Начальные данные
+-- =====================================================
+
+-- =====================================================
+-- 4. Системные настройки (пересоздаем таблицу)
+-- =====================================================
+
+-- Удаляем старую таблицу и создаем новую с нормальной структурой
+DROP TABLE IF EXISTS system_settings CASCADE;
+
+CREATE TABLE system_settings (
+    id SERIAL PRIMARY KEY,
+    -- Правила клиринга
+    clearing_min_participants INTEGER DEFAULT 2,
+    clearing_max_amount BIGINT DEFAULT 1000000,
+    -- Комиссии
+    clearing_fee REAL DEFAULT 0.001,
+    transaction_fee REAL DEFAULT 0.0001,
+    deposit_fee REAL DEFAULT 0.0005,
+    withdrawal_fee REAL DEFAULT 0.002,
+    -- Лимиты
+    daily_transaction_limit BIGINT DEFAULT 10000,
+    monthly_volume_limit BIGINT DEFAULT 100000,
+    -- Время обновления
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Вставляем базовые настройки
+INSERT INTO system_settings (
+    clearing_min_participants,
+    clearing_max_amount,
+    clearing_fee,
+    transaction_fee,
+    deposit_fee,
+    withdrawal_fee,
+    daily_transaction_limit,
+    monthly_volume_limit
+) VALUES (
+    2,          -- clearing_min_participants
+    1000000,    -- clearing_max_amount
+    0.001,      -- clearing_fee
+    0.0001,     -- transaction_fee
+    0.0005,     -- deposit_fee
+    0.002,      -- withdrawal_fee
+    10000,      -- daily_transaction_limit
+    100000      -- monthly_volume_limit
+);
 
 -- =====================================================
 -- 6. Комментарии к таблицам
@@ -283,27 +235,29 @@ COMMENT ON TABLE positions IS 'Финансовые позиции между у
 COMMENT ON TABLE netting_sessions IS 'Сессии клиринга (неттинга)';
 COMMENT ON TABLE netting_results IS 'Результаты клиринга по участникам';
 COMMENT ON TABLE settlements IS 'Выполненные расчеты между участниками';
-COMMENT ON TABLE system_settings IS 'Системные настройки с отдельными столбцами для каждой настройки';
+COMMENT ON TABLE system_settings IS 'Системные настройки и конфигурации';
 COMMENT ON TABLE audit_log IS 'Лог действий пользователей для аудита';
 COMMENT ON TABLE withdrawals IS 'Запросы на вывод средств';
-COMMENT ON TABLE outstanding_fees IS 'Таблица для отслеживания долгов по комиссиям участников';
 
--- Детальные комментарии к столбцам system_settings
-COMMENT ON COLUMN system_settings.clearing_min_participants IS 'Минимальное количество участников для клиринга';
-COMMENT ON COLUMN system_settings.clearing_max_amount IS 'Максимальная сумма для одного клиринга';
-COMMENT ON COLUMN system_settings.clearing_fee IS 'Комиссия за клиринг (доля от суммы)';
-COMMENT ON COLUMN system_settings.transaction_fee IS 'Комиссия за транзакцию (фиксированная)';
-COMMENT ON COLUMN system_settings.deposit_fee IS 'Комиссия за депозит (доля от суммы)';
-COMMENT ON COLUMN system_settings.withdrawal_fee IS 'Комиссия за вывод (доля от суммы)';
-COMMENT ON COLUMN system_settings.daily_transaction_limit IS 'Дневной лимит транзакций';
-COMMENT ON COLUMN system_settings.monthly_volume_limit IS 'Месячный лимит объема';
+-- =====================================================
+-- 7. Проверочные запросы (опционально)
+-- =====================================================
 
--- Комментарии к outstanding_fees
-COMMENT ON COLUMN outstanding_fees.participant_address IS 'Адрес участника (Solana public key)';
-COMMENT ON COLUMN outstanding_fees.amount IS 'Сумма долга в lamports';
-COMMENT ON COLUMN outstanding_fees.reason IS 'Причина долга: clearing, deposit, withdrawal';
-COMMENT ON COLUMN outstanding_fees.session_id IS 'Ссылка на сессию клиринга (если применимо)';
-COMMENT ON COLUMN outstanding_fees.settlement_id IS 'Ссылка на settlement (если применимо)';
-COMMENT ON COLUMN outstanding_fees.status IS 'Статус долга: outstanding, repaid, written_off';
+/*
+-- Проверка создания таблиц
+SELECT 
+    tablename, 
+    schemaname 
+FROM pg_tables 
+WHERE schemaname = 'public' 
+ORDER BY tablename;
 
-COMMIT;
+-- Проверка индексов
+SELECT 
+    tablename,
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE schemaname = 'public'
+ORDER BY tablename, indexname;
+*/

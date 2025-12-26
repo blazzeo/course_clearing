@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("ARJmooR8RhUjSkYiYBYtDSpPam1khAmYorn2ckmUC9vQ");
+declare_id!("DWdEzx3TPQc4MPSxFJDH4yaS4t8h2sfNw8eGpqCrkB6N");
 
 #[program]
 pub mod clearing_service {
@@ -14,6 +14,8 @@ pub mod clearing_service {
         let participant = &mut ctx.accounts.participant;
         participant.authority = ctx.accounts.authority.key();
         participant.balance = 0;
+        participant.outstanding_fees = 0;
+        participant.is_blocked = false;
         participant.withdrawal_nonce = 0;
         participant.bump = ctx.bumps.participant;
 
@@ -43,13 +45,133 @@ pub mod clearing_service {
             ],
         )?;
 
-        // Обновляем баланс в смарт-контракте
-        participant.balance += amount as i64;
-        escrow.total_locked += amount as i64;
+        // Сначала гасим долги, если они есть
+        let debt = participant.outstanding_fees;
+        if debt > 0 && amount >= debt as u64 {
+            // Полное погашение долга
+            participant.outstanding_fees = 0;
+            participant.is_blocked = false;
+            escrow.system_fees_collected += debt;
+
+            // Оставшаяся сумма идет на баланс
+            let remaining = amount - debt as u64;
+            participant.balance += remaining as i64;
+            escrow.total_locked += remaining as i64;
+
+            msg!(
+                "Debt repaid and funds deposited: {} lamports (repaid: {}, deposited: {}) by {}",
+                amount,
+                debt,
+                remaining,
+                ctx.accounts.authority.key()
+            );
+        } else if debt > 0 && amount < debt as u64 {
+            // Частичное погашение долга
+            let repaid = amount as i64;
+            participant.outstanding_fees -= repaid;
+            escrow.system_fees_collected += repaid;
+
+            // Проверяем, полностью ли погашен долг
+            if participant.outstanding_fees <= 0 {
+                participant.outstanding_fees = 0;
+                participant.is_blocked = false;
+            }
+
+            msg!(
+                "Partial debt repayment: {} lamports repaid, {} remaining by {}",
+                repaid,
+                participant.outstanding_fees,
+                ctx.accounts.authority.key()
+            );
+        } else {
+            // Обычный депозит без долгов
+            participant.balance += amount as i64;
+            escrow.total_locked += amount as i64;
+
+            msg!(
+                "Funds deposited: {} lamports by {}",
+                amount,
+                ctx.accounts.authority.key()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Взимание комиссии с возможностью создания долга
+    pub fn collect_fee(ctx: Context<CollectFee>, amount: u64, reason: String) -> Result<()> {
+        let participant = &mut ctx.accounts.participant;
+        let escrow = &mut ctx.accounts.escrow;
+
+        require!(
+            !participant.is_blocked || participant.outstanding_fees == 0,
+            ClearingError::ParticipantBlocked
+        );
+
+        let available_balance = participant.balance;
+
+        if available_balance >= amount as i64 {
+            // Полное покрытие комиссии
+            participant.balance -= amount as i64;
+            escrow.system_fees_collected += amount as i64;
+
+            msg!(
+                "Fee collected fully: {} lamports for {} by {}",
+                amount,
+                reason,
+                participant.authority
+            );
+        } else {
+            // Частичное покрытие + долг
+            let covered_amount = available_balance.max(0);
+            let debt_amount = amount as i64 - covered_amount;
+
+            // Списываем сколько есть
+            participant.balance = participant.balance.saturating_sub(covered_amount);
+            if covered_amount > 0 {
+                escrow.system_fees_collected += covered_amount;
+            }
+
+            // Создаем долг и блокируем
+            participant.outstanding_fees += debt_amount;
+            participant.is_blocked = true;
+
+            msg!(
+                "Fee partially collected: {} covered, {} debt created for {} by {}",
+                covered_amount,
+                debt_amount,
+                reason,
+                participant.authority
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Погашение долга по комиссиям
+    pub fn repay_outstanding_fees(ctx: Context<RepayFees>) -> Result<()> {
+        let participant = &mut ctx.accounts.participant;
+        let escrow = &mut ctx.accounts.escrow;
+
+        let fee_debt = participant.outstanding_fees;
+        require!(fee_debt > 0, ClearingError::NoOutstandingFees);
+
+        // Перевод средств на системный escrow
+        **ctx
+            .accounts
+            .authority
+            .to_account_info()
+            .try_borrow_mut_lamports()? -= fee_debt as u64;
+        **escrow.to_account_info().try_borrow_mut_lamports()? += fee_debt as u64;
+
+        // Обновляем системные комиссии и долг участника
+        escrow.system_fees_collected += fee_debt;
+        participant.outstanding_fees = 0;
+        participant.is_blocked = false;
 
         msg!(
-            "Funds deposited: {} lamports by {}",
-            amount,
+            "Outstanding fees repaid: {} lamports by {}",
+            fee_debt,
             ctx.accounts.authority.key()
         );
         Ok(())
@@ -64,6 +186,11 @@ pub mod clearing_service {
         require!(
             participant.authority == ctx.accounts.authority.key(),
             ClearingError::Unauthorized
+        );
+        require!(!participant.is_blocked, ClearingError::ParticipantBlocked);
+        require!(
+            participant.outstanding_fees == 0,
+            ClearingError::ParticipantBlocked
         );
         require!(
             participant.balance >= amount as i64,
@@ -144,6 +271,7 @@ pub mod clearing_service {
         let escrow = &mut ctx.accounts.escrow;
         escrow.authority = ctx.accounts.authority.key();
         escrow.total_locked = 0;
+        escrow.system_fees_collected = 0;
         escrow.bump = ctx.bumps.escrow;
 
         msg!("Escrow initialized by {}", ctx.accounts.authority.key());
@@ -223,6 +351,42 @@ pub struct RequestWithdrawal<'info> {
 }
 
 #[derive(Accounts)]
+pub struct CollectFee<'info> {
+    #[account(
+        mut,
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
+        bump = participant.bump
+    )]
+    pub participant: Account<'info, Participant>,
+    #[account(
+        mut,
+        seeds = [b"escrow"],
+        bump = escrow.bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RepayFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"participant", authority.key().as_ref(), &[1]],
+        bump = participant.bump
+    )]
+    pub participant: Account<'info, Participant>,
+    #[account(
+        mut,
+        seeds = [b"escrow"],
+        bump = escrow.bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ApproveWithdrawal<'info> {
     #[account(mut)]
     pub withdrawal: Account<'info, Withdrawal>,
@@ -297,23 +461,26 @@ pub struct InitializeEscrow<'info> {
 pub struct Participant {
     pub authority: Pubkey,
     pub balance: i64,
+    pub outstanding_fees: i64, // Невзысканные комиссии (долг)
+    pub is_blocked: bool,      // Флаг блокировки за долги
     pub bump: u8,
     pub withdrawal_nonce: u64,
 }
 
 impl Participant {
-    pub const LEN: usize = 32 + 8 + 1 + 8; // authority + balance + bump + withdrawal_nonce
+    pub const LEN: usize = 32 + 8 + 8 + 1 + 1 + 8; // authority + balance + outstanding_fees + is_blocked + bump + withdrawal_nonce
 }
 
 #[account]
 pub struct Escrow {
     pub authority: Pubkey,
     pub total_locked: i64,
+    pub system_fees_collected: i64, // Собранные системные комиссии
     pub bump: u8,
 }
 
 impl Escrow {
-    pub const LEN: usize = 32 + 8 + 1; // authority + total_locked + bump
+    pub const LEN: usize = 32 + 8 + 8 + 1; // authority + total_locked + system_fees_collected + bump
 }
 
 #[account]
@@ -348,4 +515,8 @@ pub enum ClearingError {
     InsufficientFunds,
     #[msg("Invalid withdrawal status")]
     InvalidWithdrawalStatus,
+    #[msg("Participant is blocked due to outstanding fees")]
+    ParticipantBlocked,
+    #[msg("No outstanding fees to repay")]
+    NoOutstandingFees,
 }
