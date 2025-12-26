@@ -1,12 +1,7 @@
-use crate::models::ParticipantStatus;
-use anchor_lang::{Discriminator, InstructionData};
+use anchor_lang::InstructionData;
 use anyhow::{anyhow, Result};
-use clearing_service::{
-    instruction::{
-        ApproveWithdrawal, CollectFee, DepositFunds, InitializeEscrow, InitializeParticipant,
-        RepayOutstandingFees, RequestWithdrawal,
-    },
-    Participant,
+use clearing_service::instruction::{
+    ApproveWithdrawal, DepositFunds, InitializeEscrow, InitializeParticipant, RequestWithdrawal,
 };
 use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::CommitmentConfig};
 use solana_sdk::{
@@ -16,7 +11,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "DWdEzx3TPQc4MPSxFJDH4yaS4t8h2sfNw8eGpqCrkB6N";
+const PROGRAM_ID: &str = "57nvJvn74ezSfkLEBEweM8vvTPHJPuu8hjHETy5QrBwq";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {
@@ -35,15 +30,17 @@ impl BlockchainClient {
 
     /// Получить PDA для участника
     pub async fn get_participant_pda(&self, authority: &Pubkey) -> (Pubkey, u8) {
-        Pubkey::find_program_address(
-            &[b"participant", authority.as_ref(), &[1]],
-            &self.program_id,
-        )
+        Pubkey::find_program_address(&[b"participant", authority.as_ref()], &self.program_id)
     }
 
     /// Получить PDA для escrow
     pub async fn get_escrow_pda(&self) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"escrow"], &self.program_id)
+    }
+
+    /// Получить PDA для withdrawal
+    pub async fn get_withdrawal_pda(&self, authority: &Pubkey) -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[b"withdrawal", authority.as_ref()], &self.program_id)
     }
 
     /// Проверить, инициализирован ли участник в смарт-контракте
@@ -63,72 +60,6 @@ impl BlockchainClient {
         match self.client.get_account(&escrow_pda).await {
             Ok(_) => Ok(true),   // Аккаунт существует
             Err(_) => Ok(false), // Аккаунт не найден
-        }
-    }
-
-    /// Проверить, корректно ли инициализирован Participant аккаунт (с правильным discriminator'ом)
-    pub async fn is_participant_valid(&self, authority: &Pubkey) -> Result<bool> {
-        let (participant_pda, _) = self.get_participant_pda(authority).await;
-
-        tracing::info!("Checking participant validity for PDA: {}", participant_pda);
-
-        match self.client.get_account(&participant_pda).await {
-            Ok(account) => {
-                tracing::info!(
-                    "Account exists for PDA: {}, owner: {}",
-                    participant_pda,
-                    account.owner
-                );
-
-                // Проверяем, что аккаунт принадлежит нашей программе
-                if account.owner != self.program_id {
-                    tracing::warn!(
-                        "Account owner mismatch for PDA: {} (expected: {}, got: {})",
-                        participant_pda,
-                        self.program_id,
-                        account.owner
-                    );
-                    return Ok(false);
-                }
-
-                // Проверяем discriminator
-                let expected_discriminator = Participant::DISCRIMINATOR;
-                tracing::info!(
-                    "Expected discriminator: {:?}, account data length: {}",
-                    expected_discriminator,
-                    account.data.len()
-                );
-
-                if account.data.len() < 8 {
-                    tracing::error!("Account data too short for PDA: {}", participant_pda);
-                    return Ok(false);
-                }
-
-                let actual_discriminator = &account.data[0..8];
-                if actual_discriminator != expected_discriminator {
-                    tracing::error!(
-                        "Discriminator mismatch for PDA: {} (expected: {:?}, got: {:?})",
-                        participant_pda,
-                        expected_discriminator,
-                        actual_discriminator
-                    );
-                    return Ok(false);
-                }
-
-                tracing::info!(
-                    "Participant validation successful for PDA: {}",
-                    participant_pda
-                );
-                Ok(true)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Account not found for PDA: {}, error: {}",
-                    participant_pda,
-                    e
-                );
-                Ok(false)
-            }
         }
     }
 
@@ -162,91 +93,27 @@ impl BlockchainClient {
         &self,
         authority: &Pubkey,
         amount: i64,
-    ) -> Result<(Instruction, String)> {
-        tracing::info!(
-            "Creating withdrawal instruction for authority: {}, amount: {}",
-            authority,
-            amount
-        );
-
+    ) -> Result<Instruction> {
         let (participant_pda, _participant_bump) = self.get_participant_pda(authority).await;
-        tracing::info!("Participant PDA: {}", participant_pda);
-
-        // Сначала проверяем, что Participant аккаунт корректен
-        if !self.is_participant_valid(authority).await? {
-            tracing::error!("Participant validation failed for authority: {}", authority);
-            return Err(anyhow!("Participant account is not properly initialized"));
-        }
-
-        tracing::info!(
-            "Participant validation passed, reading account data for: {}",
-            participant_pda
-        );
-
-        // Читаем аккаунт participant через RPC
-        let account_data = self.client.get_account_data(&participant_pda).await?;
-        tracing::info!("Account data length: {}", account_data.len());
-
-        // Используем ручной парсинг:
-        if account_data.len() < 8 + 32 + 8 + 1 + 8 {
-            return Err(anyhow!("Account data too short for participant"));
-        }
-
-        // Пропускаем discriminator (первые 8 байт) и authority (32 байта),
-        // затем balance (8 байт), bump (1 байт), и получаем withdrawal_nonce (8 байт)
-        let data = &account_data[8..]; // Пропускаем discriminator
-        let nonce_offset = 32 + 8 + 1; // authority + balance + bump
-        let nonce_bytes = &data[nonce_offset..nonce_offset + 8];
-        let nonce = u64::from_le_bytes(
-            nonce_bytes
-                .try_into()
-                .map_err(|_| anyhow!("Invalid nonce data"))?,
-        );
-
-        tracing::info!(
-            "Participant deserialized successfully, withdrawal_nonce: {}",
-            nonce
-        );
-
-        let withdrawal_pda = Pubkey::find_program_address(
-            &[
-                b"withdrawal",
-                authority.as_ref(),
-                &(nonce as u64).to_le_bytes(),
-            ],
-            &self.program_id,
-        )
-        .0;
-
-        tracing::info!("Withdrawal PDA calculated: {}", withdrawal_pda);
+        let (withdrawal_pda, _withdrawal_bump) = self.get_withdrawal_pda(authority).await;
 
         let data = RequestWithdrawal {
             amount: amount as u64,
         }
         .data();
 
-        tracing::info!("Instruction data created, length: {}", data.len());
-
         let accounts = vec![
-            AccountMeta::new(participant_pda, false),
+            AccountMeta::new_readonly(participant_pda, false),
             AccountMeta::new(withdrawal_pda, false),
             AccountMeta::new(*authority, true),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ];
 
-        tracing::info!(
-            "Withdrawal instruction created successfully for authority: {}",
-            authority
-        );
-
-        Ok((
-            Instruction {
-                program_id: self.program_id,
-                accounts,
-                data,
-            },
-            withdrawal_pda.to_string(),
-        ))
+        Ok(Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        })
     }
 
     /// Создать инструкцию для одобрения вывода (только администратор)
@@ -255,34 +122,9 @@ impl BlockchainClient {
         withdrawal_authority: &Pubkey,
         recipient: &Pubkey,
         admin_authority: &Pubkey,
-        pda: &str,
     ) -> Result<Instruction> {
-        tracing::info!(
-            "Creating approve withdrawal instruction for withdrawal_authority: {}, recipient: {}, admin: {}, pda: {}",
-            withdrawal_authority,
-            recipient,
-            admin_authority,
-            pda
-        );
-
-        let withdrawal_pda = Pubkey::from_str_const(&pda);
-
-        //     Pubkey::find_program_address(
-        //     &[
-        //         b"withdrawal",
-        //         withdrawal_authority.as_ref(),
-        //         &(withdrawal_nonce as u64).to_le_bytes(),
-        //     ],
-        //     &self.program_id,
-        // )
-        // .0;
-
-        tracing::info!(
-            "Approve withdrawal - calculated withdrawal PDA: {} (authority: {}, pda: {})",
-            withdrawal_pda,
-            withdrawal_authority,
-            pda
-        );
+        let (withdrawal_pda, _withdrawal_bump) =
+            self.get_withdrawal_pda(withdrawal_authority).await;
         let (participant_pda, _participant_bump) =
             self.get_participant_pda(withdrawal_authority).await;
         let (escrow_pda, _escrow_bump) = self.get_escrow_pda().await;
@@ -293,7 +135,7 @@ impl BlockchainClient {
             AccountMeta::new(withdrawal_pda, false),
             AccountMeta::new(participant_pda, false),
             AccountMeta::new(escrow_pda, false),
-            AccountMeta::new(*recipient, false), // recipient аккаунт
+            AccountMeta::new(*recipient, false),  // recipient аккаунт
             AccountMeta::new_readonly(*admin_authority, true),
         ];
 
@@ -377,120 +219,5 @@ impl BlockchainClient {
             }
             Err(_) => Ok(None), // Аккаунт не найден или не инициализирован
         }
-    }
-
-    // Создание инструкции
-    pub fn create_get_withdrawal_nonce_instruction(
-        program_id: &Pubkey,
-        participant_pda: &Pubkey,
-        authority: &Pubkey,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new_readonly(*participant_pda, false),
-            AccountMeta::new_readonly(*authority, true), // signer, если нужно
-        ];
-
-        Instruction {
-            program_id: *program_id,
-            accounts,
-            data: vec![], // Anchor сам добавит discriminator для метода
-        }
-    }
-
-    /// Создать инструкцию для взимания комиссии с возможностью создания долга
-    pub async fn create_collect_fee_instruction(
-        &self,
-        authority: &Pubkey,
-        amount: u64,
-        reason: String,
-    ) -> Result<Instruction> {
-        let (participant_pda, _) = self.get_participant_pda(authority).await;
-
-        let data = CollectFee { amount, reason }.data();
-
-        let accounts = vec![
-            AccountMeta::new(participant_pda, false),
-            AccountMeta::new(self.get_escrow_pda().await.0, false),
-            AccountMeta::new(*authority, true),
-        ];
-
-        Ok(Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        })
-    }
-
-    /// Создать инструкцию для погашения долгов по комиссиям
-    pub async fn create_repay_fees_instruction(&self, authority: &Pubkey) -> Result<Instruction> {
-        let (participant_pda, _) = self.get_participant_pda(authority).await;
-
-        let data = RepayOutstandingFees {}.data();
-
-        let accounts = vec![
-            AccountMeta::new(participant_pda, false),
-            AccountMeta::new(self.get_escrow_pda().await.0, false),
-            AccountMeta::new(*authority, true),
-        ];
-
-        Ok(Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        })
-    }
-
-    /// Получить статус участника (баланс, долги, блокировка)
-    pub async fn get_participant_status(
-        &self,
-        authority: &Pubkey,
-    ) -> Result<Option<ParticipantStatus>> {
-        let (participant_pda, _) = self.get_participant_pda(authority).await;
-
-        match self.client.get_account(&participant_pda).await {
-            Ok(account) => {
-                if account.data.len() < 8 + 32 + 8 + 8 + 1 + 1 + 8 {
-                    return Ok(None);
-                }
-
-                let data = &account.data[8..]; // Пропускаем discriminator
-                let balance = i64::from_le_bytes(data[32..40].try_into().unwrap());
-                let outstanding_fees = i64::from_le_bytes(data[40..48].try_into().unwrap());
-                let is_blocked = data[48] != 0;
-
-                Ok(Some(ParticipantStatus {
-                    address: authority.to_string(),
-                    balance,
-                    outstanding_fees,
-                    is_blocked,
-                    total_debt: outstanding_fees,
-                }))
-            }
-            Err(_) => Ok(None),
-        }
-    }
-
-    /// Проверить, заблокирован ли участник
-    pub async fn is_participant_blocked(&self, authority: &Pubkey) -> Result<bool> {
-        match self.get_participant_status(authority).await? {
-            Some(status) => Ok(status.is_blocked),
-            None => Ok(false), // Если аккаунт не инициализирован, считаем не заблокированным
-        }
-    }
-
-    /// Получить баланс escrow (общие заблокированные средства и собранные комиссии)
-    pub async fn get_escrow_balance(&self) -> Result<(i64, i64)> {
-        let (escrow_pda, _) = self.get_escrow_pda().await;
-
-        let account = self.client.get_account(&escrow_pda).await?;
-        if account.data.len() < 8 + 32 + 8 + 8 + 1 {
-            return Err(anyhow!("Invalid escrow account data"));
-        }
-
-        let data = &account.data[8..]; // Пропускаем discriminator
-        let total_locked = i64::from_le_bytes(data[32..40].try_into().unwrap());
-        let system_fees_collected = i64::from_le_bytes(data[40..48].try_into().unwrap());
-
-        Ok((total_locked, system_fees_collected))
     }
 }

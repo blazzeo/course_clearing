@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE settlements SET fee_paid=TRUE WHERE id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "098bf5ab4d7506d4a4ac769df8943dcc937321a5464e6c21b9f4bb945e883061"
+}

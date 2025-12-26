@@ -103,8 +103,7 @@ pub async fn get_withdrawals(
     };
 
     // Проверяем права пользователя
-    if let Err(resp) = require_auth(pool.get_ref(), &participant_address, "view_withdrawals").await
-    {
+    if let Err(resp) = require_auth(pool.get_ref(), participant_address, "view_withdrawals").await {
         return resp;
     }
 

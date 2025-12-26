@@ -1,6 +1,6 @@
 use super::log::log_audit_action;
 use crate::blockchain::BlockchainClient;
-use crate::db::{collect_confirmed_positions, create_outstanding_fee};
+use crate::db::collect_confirmed_positions;
 use crate::models::{ApiResponse, Position};
 use actix_web::{web, HttpResponse, Responder};
 use serde_json;
@@ -55,7 +55,7 @@ pub async fn multi_party_clearing(
     for participant_addr in &participants {
         let is_blocked = blockchain_client
             .is_participant_blocked(
-                &solana_sdk::pubkey::Pubkey::from_str(&participant_addr).unwrap(),
+                &solana_sdk::pubkey::Pubkey::from_str(participant_addr).unwrap(),
             )
             .await
             .unwrap_or(false);
@@ -158,17 +158,17 @@ pub async fn multi_party_clearing(
                 "instruction": fee_ix
             }));
 
-            // Создаем запись о потенциальном долге
-            create_outstanding_fee(
-                &pool,
-                &s.from_address,
-                fee_amount as i64,
-                "clearing",
-                Some(session_id),
-                Some(settlement_id),
-            )
-            .await
-            .unwrap();
+            // // Создаем запись о потенциальном долге
+            // create_outstanding_fee(
+            //     &pool,
+            //     &s.from_address,
+            //     fee_amount as i64,
+            //     "clearing",
+            //     Some(session_id),
+            //     Some(settlement_id),
+            // )
+            // .await
+            // .unwrap();
         }
     }
 

@@ -80,9 +80,6 @@ export default function Profile() {
 
 			if (simulationResult.value.logs) {
 				console.log('Логи транзакции:', simulationResult.value.logs)
-				simulationResult.value.logs.forEach((log, index) => {
-					console.log(`Лог ${index}:`, log)
-				})
 			}
 
 			const signature = await sendTransaction(tx, connection)

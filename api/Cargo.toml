@@ -7,7 +7,7 @@ edition = "2021"
 clearing_service = { path = "../program/clearing-service/" }
 actix-web = "4.4"
 actix-cors = "0.6"
-tokio = { version = "1.35", features = ["full"] }
+# tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0.227", features = ["derive"] }
 serde_json = "1.0"
 sqlx = { version = "0.8", features = ["runtime-tokio-native-tls", "postgres", "chrono", "migrate"] }
@@ -18,11 +18,11 @@ chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
 env_logger = "0.11"
 anyhow = "1.0"
-thiserror = "1.0"
+# thiserror = "1.0"
 tracing = "0.1"
 ed25519-dalek = "2.2.0"
 base64 = "0.22.1"
-solana-program = "3.0.0"
+# solana-program = "3.0.0"
 anchor-lang = { version = "0.32.1", features = ["derive"] }
 # borsh = { version = "1.6.0", features = ["derive"] }
 

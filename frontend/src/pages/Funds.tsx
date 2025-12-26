@@ -386,7 +386,7 @@ export default function Funds() {
 				{loading ? (
 					<div>Загрузка...</div>
 				) : balance ? (
-					<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+					<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
 						<div style={{ padding: '16px', border: '1px solid #e0e0e0', borderRadius: '8px' }}>
 							<div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4caf50' }}>
 								{(balance.blockchain_balance / 1e9).toFixed(4)} SOL
@@ -398,22 +398,6 @@ export default function Funds() {
 								{balance.contract_balance ? (balance.contract_balance / 1e9).toFixed(4) + ' SOL' : 'Н/Д'}
 							</div>
 							<div style={{ color: '#666' }}>Депозит</div>
-						</div>
-						<div style={{ padding: '16px', border: participantStatus?.is_blocked ? '2px solid #f44336' : '1px solid #e0e0e0', borderRadius: '8px', background: participantStatus?.is_blocked ? '#ffebee' : 'white' }}>
-							<div style={{ fontSize: '24px', fontWeight: 'bold', color: participantStatus?.is_blocked ? '#f44336' : '#ff9800' }}>
-								{participantStatus ? (participantStatus.outstanding_fees / 1e9).toFixed(4) + ' SOL' : 'Загрузка...'}
-							</div>
-							<div style={{ color: '#666' }}>
-								Долги по комиссиям
-							</div>
-							{participantStatus?.is_blocked && (
-								<div style={{ marginTop: '8px', fontSize: '12px', color: '#f44336', fontWeight: 'bold' }}>
-									⚠️ Операции ограничены
-									<div style={{ fontSize: '11px', marginTop: '2px', color: '#666' }}>
-										Депозит доступен для погашения
-									</div>
-								</div>
-							)}
 						</div>
 					</div>
 				) : (

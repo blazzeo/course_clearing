@@ -22,17 +22,11 @@ interface ParticipantData {
 
 interface SystemSetting {
 	id: number,
-	// Правила клиринга
-	clearing_min_participants: number,
-	clearing_max_amount: number,
 	// Комиссии
 	clearing_fee: number,
 	transaction_fee: number,
 	deposit_fee: number,
 	withdrawal_fee: number,
-	// Лимиты
-	daily_transaction_limit: number,
-	monthly_volume_limit: number,
 	// Время обновления
 	updated_at: string
 }
@@ -131,370 +125,20 @@ export default function AdminPanel() {
 		try {
 			setActionLoading(true)
 
-			console.log(`[DEBUG] Starting clearing execution for admin:`, publicKey.toBase58())
-			console.log(`[DEBUG] Environment info:`, {
-				userAgent: navigator.userAgent,
-				walletName: 'Phantom', // предполагаем что это Phantom
-				solanaWeb3Version: '1.x.x', // версия из package.json
-				connectionCommitment: 'confirmed'
-			})
-
 			// 1. Рассчитываем клиринг
 			toast.info("Рассчитываем клиринг...")
-			console.log(`[DEBUG] Requesting clearing calculation from API...`)
 			const clearingResponse = await axios.post(`${API_URL}/api/clearing/run?admin_address=${publicKey.toBase58()}`)
-
-			console.log(`[DEBUG] Clearing API response:`, {
-				success: clearingResponse.data.success,
-				sessionId: clearingResponse.data.data?.session_id,
-				settlementsCount: clearingResponse.data.data?.settlements?.length,
-				feeInstructionsCount: clearingResponse.data.data?.fee_instructions?.length,
-				clearingFeeRate: clearingResponse.data.data?.clearing_fee_rate
-			})
 
 			if (!clearingResponse.data.success) {
 				throw new Error(clearingResponse.data.error || 'Ошибка расчета клиринга')
 			}
 
-			const { fee_instructions, session_id } = clearingResponse.data.data
-
-			if (!fee_instructions || fee_instructions.length === 0) {
-				toast.success("Клиринг завершен - нет комиссий для взимания")
-				return
-			}
-
-			// 2. Выполняем комиссии в блокчейне батчами по 10
-			const batchSize = 10
-			const totalBatches = Math.ceil(fee_instructions.length / batchSize)
-			toast.info(`Выполняем ${fee_instructions.length} комиссий в ${totalBatches} батчах по ${batchSize}...`)
-
-			console.log(`[DEBUG] Starting fee collection:`, {
-				totalFees: fee_instructions.length,
-				batchSize,
-				totalBatches,
-				connectionUrl: RPC_URL
-			})
-
-			const connection = new Connection(RPC_URL, "confirmed")
-			console.log(`[DEBUG] Created Solana connection to:`, RPC_URL)
-			const feeSignatures: Array<{ settlement_id: number, signature: string }> = []
-			let batchIndex = 0
-
-			for (let i = 0; i < fee_instructions.length; i += batchSize) {
-				batchIndex++
-				const batch = fee_instructions.slice(i, i + batchSize)
-				const batchStart = i + 1
-				const batchEnd = Math.min(i + batchSize, fee_instructions.length)
-
-				console.log(`[DEBUG] Starting batch ${batchIndex}/${totalBatches}:`, {
-					batchStart,
-					batchEnd,
-					batchSize: batch.length,
-					settlementIds: batch.map(f => f.settlement_id)
-				})
-
-				toast.info(`Выполняем батч ${batchIndex}/${totalBatches} (комиссии ${batchStart}-${batchEnd})...`)
-
-				try {
-					// Создаем транзакцию с несколькими инструкциями
-					const tx = new Transaction()
-					const batchSignatures = []
-
-					for (let feeIndex = 0; feeIndex < batch.length; feeIndex++) {
-						const fee = batch[feeIndex]
-
-						console.log(`[DEBUG] Creating fee instruction ${batchIndex}.${feeIndex + 1}:`, {
-							settlementId: fee.settlement_id,
-							fromAddress: fee.from_address,
-							feeAmount: fee.fee_amount,
-							programId: fee.instruction.program_id,
-							dataLength: fee.instruction.data.length,
-							accountsCount: fee.instruction.accounts.length
-						})
-
-						// Создаем инструкцию
-						const ix = new TransactionInstruction({
-							programId: new PublicKey(fee.instruction.program_id),
-							keys: fee.instruction.accounts.map((acc: any, accIndex: number) => {
-								const pubkey = new PublicKey(acc.pubkey)
-								console.log(`[DEBUG] Account ${accIndex}:`, {
-									pubkey: pubkey.toBase58(),
-									isSigner: acc.is_signer,
-									isWritable: acc.is_writable,
-									isParticipant: accIndex === 0,
-									isEscrow: accIndex === 1,
-									isAuthority: accIndex === 2
-								})
-								return {
-									pubkey,
-									isSigner: acc.is_signer,
-									isWritable: acc.is_writable
-								}
-							}),
-							data: Buffer.from(fee.instruction.data),
-						})
-
-						// Проверяем данные инструкции
-						console.log(`[DEBUG] Instruction data for settlement ${fee.settlement_id}:`, {
-							programId: ix.programId.toBase58(),
-							keysCount: ix.keys.length,
-							dataLength: ix.data.length,
-							dataHex: Array.from(ix.data).map(b => b.toString(16).padStart(2, '0')).join(''),
-							dataDecoded: {
-								discriminator: Array.from(ix.data.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(''),
-								amount: new DataView(ix.data.buffer).getBigUint64(8, true).toString(),
-								reasonLength: ix.data[16],
-								reason: new TextDecoder().decode(ix.data.slice(17))
-							}
-						})
-
-						console.log(`[DEBUG] TransactionInstruction created for settlement ${fee.settlement_id}`)
-
-						tx.add(ix)
-						batchSignatures.push(fee.settlement_id)
-					}
-
-					// Настраиваем транзакцию
-					tx.feePayer = publicKey
-					const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash()
-					tx.recentBlockhash = blockhash
-
-					// Note: feePayer будет автоматически подписан wallet adapter
-
-					const currentSlot = await connection.getSlot()
-					console.log(`[DEBUG] Blockhash timing:`, {
-						blockhash,
-						lastValidBlockHeight,
-						currentSlot,
-						slotsUntilExpiry: lastValidBlockHeight - currentSlot,
-						timestamp: new Date().toISOString()
-					})
-
-					// Проверяем существование аккаунтов перед отправкой
-					console.log(`[DEBUG] Checking accounts existence before sending...`)
-
-					// Специальная проверка PDA аккаунтов
-					const programId = tx.instructions[0].programId
-					console.log(`[DEBUG] Program ID:`, programId.toBase58())
-
-					for (let accIndex = 0; accIndex < tx.instructions[0].keys.length; accIndex++) {
-						const account = tx.instructions[0].keys[accIndex]
-
-						// Рассчитываем ожидаемые PDA для проверки
-						let expectedDescription = ''
-						if (accIndex === 0) {
-							// Participant PDA: [b"participant", authority.key().as_ref(), &[1]]
-							const [expectedPda] = await PublicKey.findProgramAddress(
-								[new TextEncoder().encode("participant"), tx.instructions[0].keys[2].pubkey.toBytes(), new Uint8Array([1])],
-								programId
-							)
-							expectedDescription = `Expected participant PDA: ${expectedPda.toBase58()}`
-						} else if (accIndex === 1) {
-							// Escrow PDA: [b"escrow"]
-							const [expectedPda] = await PublicKey.findProgramAddress(
-								[new TextEncoder().encode("escrow")],
-								programId
-							)
-							expectedDescription = `Expected escrow PDA: ${expectedPda.toBase58()}`
-						}
-
-						try {
-							const accountInfo = await connection.getAccountInfo(account.pubkey)
-							const isExpectedPda = accIndex < 2 ? account.pubkey.equals(
-								accIndex === 0 ?
-									(await PublicKey.findProgramAddress(
-										[new TextEncoder().encode("participant"), tx.instructions[0].keys[2].pubkey.toBytes(), new Uint8Array([1])],
-										programId
-									))[0] :
-									(await PublicKey.findProgramAddress(
-										[new TextEncoder().encode("escrow")],
-										programId
-									))[0]
-							) : true
-
-							console.log(`[DEBUG] Account ${accIndex} (${account.isSigner ? 'signer' : account.isWritable ? 'writable' : 'readonly'}):`, {
-								pubkey: account.pubkey.toBase58(),
-								exists: accountInfo !== null,
-								isValidPda: isExpectedPda,
-								lamports: accountInfo?.lamports || 0,
-								owner: accountInfo?.owner?.toBase58() || null,
-								dataLength: accountInfo?.data?.length || 0,
-								expected: accIndex < 2 ? expectedDescription : 'N/A'
-							})
-
-							if (!accountInfo && accIndex < 2) { // participant и escrow должны существовать
-								console.error(`[ERROR] Critical: Account ${accIndex} does not exist:`, account.pubkey.toBase58())
-								console.error(`[ERROR] This will cause transaction to fail!`)
-							} else if (!isExpectedPda && accIndex < 2) {
-								console.error(`[ERROR] PDA mismatch for account ${accIndex}:`, {
-									actual: account.pubkey.toBase58(),
-									expected: expectedDescription
-								})
-							}
-						} catch (accError) {
-							console.error(`[ERROR] Failed to check account ${accIndex}:`, accError)
-						}
-					}
-
-					// Проверяем баланс fee payer
-					const balance = await connection.getBalance(publicKey)
-					console.log(`[DEBUG] Fee payer balance:`, {
-						pubkey: publicKey.toBase58(),
-						balance: balance / 1e9, // в SOL
-						lamports: balance
-					})
-
-					console.log(`[DEBUG] About to send batch ${batchIndex}:`, {
-						instructionsCount: tx.instructions.length,
-						batchSignaturesCount: batchSignatures.length,
-						feePayer: publicKey.toBase58(),
-						blockhash: blockhash,
-						recentBlockhash: tx.recentBlockhash
-					})
-
-					// Симулируем транзакцию перед отправкой
-					console.log(`[DEBUG] Simulating transaction before sending...`)
-					const simulationStart = Date.now()
-					try {
-						const simulation = await connection.simulateTransaction(tx)
-						const simulationEnd = Date.now()
-						console.log(`[DEBUG] Simulation completed in ${simulationEnd - simulationStart}ms:`, {
-							err: simulation.value.err,
-							logs: simulation.value.logs,
-							accounts: simulation.value.accounts,
-							unitsConsumed: simulation.value.unitsConsumed
-						})
-
-						if (simulation.value.err) {
-							console.error(`[ERROR] Simulation failed:`, simulation.value.err)
-							console.error(`[ERROR] Simulation logs:`, simulation.value.logs)
-							throw new Error(`Simulation failed: ${simulation.value.err}`)
-						}
-
-						console.log(`[DEBUG] Simulation successful, proceeding with transaction...`)
-					} catch (simError) {
-						console.error(`[ERROR] Simulation error:`, simError)
-						throw simError
-					}
-
-					// Проверяем свежесть blockhash перед отправкой
-					const currentSlotCheck = await connection.getSlot()
-					const slotsRemaining = lastValidBlockHeight - currentSlotCheck
-					console.log(`[DEBUG] Blockhash freshness check:`, {
-						currentSlot: currentSlotCheck,
-						lastValidBlockHeight,
-						slotsRemaining,
-						isFresh: slotsRemaining > 10
-					})
-
-					if (slotsRemaining <= 10) {
-						console.warn(`[WARN] Blockhash is getting stale (${slotsRemaining} slots remaining), getting fresh one...`)
-						const freshBlockhash = await connection.getRecentBlockhash()
-						tx.recentBlockhash = freshBlockhash.blockhash
-						console.log(`[DEBUG] Updated blockhash:`, freshBlockhash.blockhash)
-					}
-
-					// Небольшая задержка между симуляцией и отправкой
-					await new Promise(resolve => setTimeout(resolve, 100))
-
-					// Выполняем батч
-					// Проверяем что транзакция готова к отправке
-					console.log(`[DEBUG] Transaction readiness check:`, {
-						hasInstructions: tx.instructions.length > 0,
-						hasFeePayer: !!tx.feePayer,
-						hasRecentBlockhash: !!tx.recentBlockhash,
-						totalSize: tx.serialize().length // размер в байтах
-					})
-
-					console.log(`[DEBUG] Sending transaction to blockchain...`)
-					const sendStart = Date.now()
-					const signature = await sendTransaction(tx, connection)
-					const sendEnd = Date.now()
-					console.log(`[DEBUG] Transaction sent in ${sendEnd - sendStart}ms, signature:`, signature)
-					console.log(`[DEBUG] Transaction sent successfully:`, signature)
-
-					// Сохраняем сигнатуры для всех комиссий в батче
-					batchSignatures.forEach(settlementId => {
-						feeSignatures.push({
-							settlement_id: settlementId,
-							signature: signature
-						})
-					})
-
-					toast.success(`Батч ${batchIndex}/${totalBatches} выполнен: ${signature}`)
-
-				} catch (error: any) {
-					console.error(`[ERROR] Batch ${batchIndex} execution failed:`, {
-						error: error,
-						message: error.message,
-						name: error.name,
-						code: error.code,
-						batchSize: batch.length,
-						settlementIds: batch.map((f: any) => f.settlement_id),
-						instructionCount: batch.length,
-						stack: error.stack
-					})
-
-					// Логируем все доступные детали ошибки
-					if (error.logs) {
-						console.error(`[ERROR] Transaction logs:`, error.logs)
-					}
-					if (error.transactionError) {
-						console.error(`[ERROR] Transaction error details:`, error.transactionError)
-					}
-					if (error.error) {
-						console.error(`[ERROR] Nested error:`, error.error)
-					}
-					if (error.data) {
-						console.error(`[ERROR] Error data:`, error.data)
-					}
-
-					// Проверяем конкретные коды ошибок
-					if (error.code === -32603) {
-						console.error(`[ERROR] RPC Internal Error (-32603) - possible causes:`, {
-							'Account not found': 'Participant or escrow PDA does not exist',
-							'Insufficient funds': 'Not enough SOL for transaction fee',
-							'Invalid instruction': 'Smart contract instruction error',
-							'Program error': 'Error in clearing-service program'
-						})
-					}
-
-					toast.error(`Ошибка выполнения батча ${batchIndex}: ${error.message}`)
-					return
-				}
-			}
-
-			// 3. Подтверждаем выполненные комиссии в базе данных
-			toast.info("Подтверждаем комиссии в базе данных...")
-			console.log(`[DEBUG] Confirming fees in database:`, {
-				sessionId: session_id,
-				totalSignatures: feeSignatures.length,
-				signatures: feeSignatures
-			})
-
-			await axios.post(`${API_URL}/api/blockchain/clearing/fees/confirm?admin_address=${publicKey.toBase58()}`, {
-				session_id: session_id,
-				fee_signatures: feeSignatures
-			})
-
-			console.log(`[DEBUG] Clearing completed successfully!`)
-			toast.success(`Клиринг завершен! Выполнено ${fee_instructions.length} комиссий в ${totalBatches} батчах`)
-
-			// Обновляем баланс escrow
-			console.log(`[DEBUG] Refreshing escrow balance...`)
-			loadEscrowBalance()
+			toast.success("Сессия клиринга завершена успешно")
 
 		} catch (error: any) {
-			console.error('[ERROR] Clearing execution failed:', {
-				error: error,
-				message: error.message,
-				response: error.response?.data,
-				stack: error.stack
-			})
 			toast.error(error.response?.data?.error || 'Ошибка при проведении клиринга')
 		} finally {
 			setActionLoading(false)
-			console.log(`[DEBUG] Clearing execution finished (with error or success)`)
 		}
 	}
 
@@ -1127,58 +771,10 @@ export default function AdminPanel() {
 							) : isEditing ? (
 								/* Форма редактирования */
 								<div style={{ display: 'grid', gap: '24px' }}>
-									{/* Правила клиринга */}
-									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
-										<h4 style={{ margin: '0 0 16px 0', color: '#1976d2' }}>📋 Правила клиринга</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Минимальное количество участников
-												</label>
-												<input
-													type="number"
-													value={editingSettings.clearing_min_participants || systemSettings.clearing_min_participants}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														clearing_min_participants: parseInt(e.target.value) || 2
-													})}
-													min="1"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Максимальная сумма (SOL)
-												</label>
-												<input
-													type="number"
-													value={(editingSettings.clearing_max_amount || systemSettings.clearing_max_amount) / 1e9}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														clearing_max_amount: Math.round(parseFloat(e.target.value) * 1e9) || 1000000
-													})}
-													min="0"
-													step="0.01"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
-										</div>
-									</div>
-
 									{/* Комиссии */}
 									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
 										<h4 style={{ margin: '0 0 16px 0', color: '#388e3c' }}>💰 Комиссии</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
 											<div>
 												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
 													Клиринг (%)
@@ -1203,11 +799,11 @@ export default function AdminPanel() {
 											</div>
 											<div>
 												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Транзакция (SOL)
+													Транзакция (%)
 												</label>
 												<input
 													type="number"
-													value={(editingSettings.transaction_fee || systemSettings.transaction_fee) * 1e9}
+													value={(editingSettings.transaction_fee || systemSettings.transaction_fee) * 100}
 													onChange={(e) => setEditingSettings({
 														...editingSettings,
 														transaction_fee: (parseFloat(e.target.value) || 0) / 1e9
@@ -1244,57 +840,32 @@ export default function AdminPanel() {
 													}}
 												/>
 											</div>
+
+											<div>
+												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
+													Вывод (%)
+												</label>
+												<input
+													type="number"
+													value={((editingSettings.withdrawal_fee || systemSettings.withdrawal_fee) * 100)}
+													onChange={(e) => setEditingSettings({
+														...editingSettings,
+														withdrawal_fee: (parseFloat(e.target.value) || 0) / 100
+													})}
+													min="0"
+													max="100"
+													step="0.01"
+													style={{
+														width: '100%',
+														padding: '8px 12px',
+														border: '1px solid #ccc',
+														borderRadius: '4px'
+													}}
+												/>
+											</div>
 										</div>
 									</div>
 
-									{/* Лимиты */}
-									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
-										<h4 style={{ margin: '0 0 16px 0', color: '#f57c00' }}>📊 Лимиты</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Дневной лимит транзакций (SOL)
-												</label>
-												<input
-													type="number"
-													value={(editingSettings.daily_transaction_limit || systemSettings.daily_transaction_limit) / 1e9}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														daily_transaction_limit: Math.round(parseFloat(e.target.value) * 1e9) || 10000
-													})}
-													min="0"
-													step="0.01"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Месячный лимит объема (SOL)
-												</label>
-												<input
-													type="number"
-													value={(editingSettings.monthly_volume_limit || systemSettings.monthly_volume_limit) / 1e9}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														monthly_volume_limit: Math.round(parseFloat(e.target.value) * 1e9) || 100000
-													})}
-													min="0"
-													step="0.01"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
-										</div>
-									</div>
 
 									{/* Кнопки управления */}
 									<div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '16px', borderTop: '1px solid #e0e0e0' }}>
@@ -1330,47 +901,26 @@ export default function AdminPanel() {
 							) : (
 								/* Отображение настроек */
 								<div style={{ display: 'grid', gap: '16px' }}>
-									{/* Правила клиринга */}
-									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
-										<h4 style={{ margin: '0 0 12px 0', color: '#1976d2' }}>📋 Правила клиринга</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-											<div>
-												<strong>Мин. участников:</strong> {systemSettings.clearing_min_participants}
-											</div>
-											<div>
-												<strong>Макс. сумма:</strong> {(systemSettings.clearing_max_amount / 1e9).toFixed(2)} SOL
-											</div>
-										</div>
-									</div>
 
 									{/* Комиссии */}
 									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
 										<h4 style={{ margin: '0 0 12px 0', color: '#388e3c' }}>💰 Комиссии</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
 											<div>
 												<strong>Клиринг:</strong> {(systemSettings.clearing_fee * 100).toFixed(2)}%
 											</div>
 											<div>
-												<strong>Транзакция:</strong> {(systemSettings.transaction_fee * 1e9).toFixed(6)} SOL
+												<strong>Транзакция:</strong> {(systemSettings.transaction_fee * 100).toFixed(2)}%
 											</div>
 											<div>
 												<strong>Депозит:</strong> {(systemSettings.deposit_fee * 100).toFixed(2)}%
 											</div>
+											<div>
+												<strong>Вывод:</strong> {(systemSettings.withdrawal_fee * 100).toFixed(2)}%
+											</div>
 										</div>
 									</div>
 
-									{/* Лимиты */}
-									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
-										<h4 style={{ margin: '0 0 12px 0', color: '#f57c00' }}>📊 Лимиты</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-											<div>
-												<strong>Дневной лимит:</strong> {(systemSettings.daily_transaction_limit / 1e9).toFixed(2)} SOL
-											</div>
-											<div>
-												<strong>Месячный лимит:</strong> {(systemSettings.monthly_volume_limit / 1e9).toFixed(2)} SOL
-											</div>
-										</div>
-									</div>
 
 									{/* Информация об обновлении */}
 									<div style={{ textAlign: 'right', color: '#666', fontSize: '12px', paddingTop: '8px' }}>

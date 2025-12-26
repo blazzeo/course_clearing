@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("DWdEzx3TPQc4MPSxFJDH4yaS4t8h2sfNw8eGpqCrkB6N");
+declare_id!("6N3d12ynnUC5r8pLbr95vmFQMzp6prcKRKd5SyZYWjkw");
 
 #[program]
 pub mod clearing_service {
@@ -98,52 +98,33 @@ pub mod clearing_service {
         Ok(())
     }
 
-    /// Взимание комиссии с возможностью создания долга
+    /// Оплата комиссии с депозита на escrow
     pub fn collect_fee(ctx: Context<CollectFee>, amount: u64, reason: String) -> Result<()> {
         let participant = &mut ctx.accounts.participant;
         let escrow = &mut ctx.accounts.escrow;
 
+        // Проверяем, что участник сам подписывает комиссию
         require!(
-            !participant.is_blocked || participant.outstanding_fees == 0,
-            ClearingError::ParticipantBlocked
+            participant.authority == ctx.accounts.authority.key(),
+            ClearingError::Unauthorized
         );
 
-        let available_balance = participant.balance;
+        // Проверяем достаточность средств (упрощенная система без долгов)
+        require!(
+            participant.balance >= amount as i64,
+            ClearingError::InsufficientFunds
+        );
 
-        if available_balance >= amount as i64 {
-            // Полное покрытие комиссии
-            participant.balance -= amount as i64;
-            escrow.system_fees_collected += amount as i64;
+        // Списываем комиссию с депозита
+        participant.balance -= amount as i64;
+        escrow.system_fees_collected += amount as i64;
 
-            msg!(
-                "Fee collected fully: {} lamports for {} by {}",
-                amount,
-                reason,
-                participant.authority
-            );
-        } else {
-            // Частичное покрытие + долг
-            let covered_amount = available_balance.max(0);
-            let debt_amount = amount as i64 - covered_amount;
-
-            // Списываем сколько есть
-            participant.balance = participant.balance.saturating_sub(covered_amount);
-            if covered_amount > 0 {
-                escrow.system_fees_collected += covered_amount;
-            }
-
-            // Создаем долг и блокируем
-            participant.outstanding_fees += debt_amount;
-            participant.is_blocked = true;
-
-            msg!(
-                "Fee partially collected: {} covered, {} debt created for {} by {}",
-                covered_amount,
-                debt_amount,
-                reason,
-                participant.authority
-            );
-        }
+        msg!(
+            "Fee paid: {} lamports for {} by {}",
+            amount,
+            reason,
+            participant.authority
+        );
 
         Ok(())
     }
@@ -152,17 +133,33 @@ pub mod clearing_service {
     pub fn repay_outstanding_fees(ctx: Context<RepayFees>) -> Result<()> {
         let participant = &mut ctx.accounts.participant;
         let escrow = &mut ctx.accounts.escrow;
-
         let fee_debt = participant.outstanding_fees;
+
         require!(fee_debt > 0, ClearingError::NoOutstandingFees);
 
-        // Перевод средств на системный escrow
-        **ctx
-            .accounts
-            .authority
-            .to_account_info()
-            .try_borrow_mut_lamports()? -= fee_debt as u64;
-        **escrow.to_account_info().try_borrow_mut_lamports()? += fee_debt as u64;
+        // FIX: Используем CPI Transfer вместо прямого вычитания лампортов
+        let transfer_ix = system_instruction::transfer(
+            &ctx.accounts.authority.key(),
+            &escrow.key(),
+            fee_debt as u64,
+        );
+
+        anchor_lang::solana_program::program::invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.authority.to_account_info(),
+                escrow.to_account_info(),
+                ctx.accounts.system_program.to_account_info(), // Не забудьте добавить System Program в структуру
+            ],
+        )?;
+
+        // // Перевод средств на системный escrow
+        // **ctx
+        //     .accounts
+        //     .authority
+        //     .to_account_info()
+        //     .try_borrow_mut_lamports()? -= fee_debt as u64;
+        // **escrow.to_account_info().try_borrow_mut_lamports()? += fee_debt as u64;
 
         // Обновляем системные комиссии и долг участника
         escrow.system_fees_collected += fee_debt;
@@ -354,14 +351,14 @@ pub struct RequestWithdrawal<'info> {
 pub struct CollectFee<'info> {
     #[account(
         mut,
-        seeds = [b"participant", authority.key().as_ref(), &[1]],
+        seeds = [b"participant", participant.authority.as_ref(), &[1]],
         bump = participant.bump
     )]
     pub participant: Account<'info, Participant>,
     #[account(
         mut,
         seeds = [b"escrow"],
-        bump = escrow.bump
+        bump = escrow.bump,
     )]
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
@@ -384,6 +381,7 @@ pub struct RepayFees<'info> {
     pub escrow: Account<'info, Escrow>,
     #[account(mut)]
     pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
