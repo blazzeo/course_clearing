@@ -1,4 +1,3 @@
-mod admin_service;
 mod auth_service;
 mod blockchain;
 mod db;
@@ -70,6 +69,7 @@ async fn main() -> std::io::Result<()> {
             .route("/system/info", web::get().to(handlers::get_system_info))
             .service(
                 web::scope("/api")
+                    // Positions
                     .route(
                         "/positions",
                         web::get().to(endpoints::positions::get_positions),
@@ -98,6 +98,11 @@ async fn main() -> std::io::Result<()> {
                         "/positions/{id}/clear",
                         web::post().to(endpoints::clearing::execute_clearing),
                     )
+                    // Users API
+                    .route(
+                        "/auth/register-guest",
+                        web::post().to(endpoints::users::register_guest_handler),
+                    )
                     .route(
                         "/participants",
                         web::get().to(endpoints::users::get_participants),
@@ -110,6 +115,9 @@ async fn main() -> std::io::Result<()> {
                         "/participants/{address}",
                         web::get().to(endpoints::users::get_participant),
                     )
+                    .route("/profile", web::get().to(endpoints::users::get_profile))
+                    .route("/profile", web::put().to(endpoints::users::update_profile))
+                    //  Clearing
                     .route(
                         "/clearing/run",
                         web::post().to(endpoints::clearing::multi_party_clearing),
@@ -119,9 +127,18 @@ async fn main() -> std::io::Result<()> {
                         web::get().to(handlers::get_user_settlements),
                     )
                     .route(
+                        "/settlements/{id}/fee",
+                        web::put().to(handlers::pay_settlement_fee),
+                    )
+                    .route(
                         "/settlements/{id}/pay",
                         web::post().to(handlers::pay_settlement),
                     )
+                    .route(
+                        "/blockchain/escrow-pda",
+                        web::get().to(endpoints::blockchain::get_escrow_address),
+                    )
+                    //  Admin
                     .route("/admins", web::get().to(endpoints::admin::get_admins))
                     .route("/admins/add", web::post().to(endpoints::admin::add_admin))
                     .route(
@@ -132,13 +149,6 @@ async fn main() -> std::io::Result<()> {
                         "/admins/check/{address}",
                         web::get().to(endpoints::admin::check_admin_status),
                     )
-                    // Новые маршруты для ролей и профилей
-                    .route(
-                        "/auth/register-guest",
-                        web::post().to(endpoints::users::register_guest_handler),
-                    )
-                    .route("/profile", web::get().to(endpoints::users::get_profile))
-                    .route("/profile", web::put().to(endpoints::users::update_profile))
                     .route(
                         "/admin/change-role",
                         web::post().to(endpoints::admin::change_user_role),
@@ -156,6 +166,15 @@ async fn main() -> std::io::Result<()> {
                         web::delete().to(endpoints::admin::delete_participant),
                     )
                     .route(
+                        "/admin/initialize-escrow",
+                        web::post().to(endpoints::blockchain::initialize_escrow),
+                    )
+                    .route(
+                        "/admin/withdrawals",
+                        web::get().to(endpoints::funds::get_all_withdrawals),
+                    )
+                    //  Audit + system Info
+                    .route(
                         "/system/settings",
                         web::get().to(handlers::get_system_settings),
                     )
@@ -168,15 +187,7 @@ async fn main() -> std::io::Result<()> {
                         "/audit/balances",
                         web::get().to(endpoints::funds::get_all_balances),
                     )
-                    .route(
-                        "/admin/initialize-escrow",
-                        web::post().to(endpoints::blockchain::initialize_escrow),
-                    )
-                    .route(
-                        "/admin/withdrawals",
-                        web::get().to(endpoints::funds::get_all_withdrawals),
-                    )
-                    // Новые endpoints для работы со смарт-контрактом
+                    // endpoints для работы со смарт-контрактом
                     .route(
                         "/blockchain/withdrawals",
                         web::get().to(endpoints::funds::get_withdrawals),
@@ -191,7 +202,11 @@ async fn main() -> std::io::Result<()> {
                     )
                     .route(
                         "/blockchain/withdraw/request",
-                        web::post().to(endpoints::blockchain::request_withdrawal),
+                        web::post().to(endpoints::blockchain::request_withdrawal_instruction),
+                    )
+                    .route(
+                        "/blockchain/withdraw/confirm",
+                        web::post().to(endpoints::blockchain::confirm_withdrawal),
                     )
                     .route(
                         "/blockchain/withdraw/approve",
@@ -204,6 +219,29 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/blockchain/balance",
                         web::get().to(endpoints::blockchain::get_blockchain_balance),
+                    )
+                    .route(
+                        "/blockchain/status",
+                        web::get().to(endpoints::blockchain::get_participant_status),
+                    )
+                    .route(
+                        "/blockchain/fees/collect",
+                        web::post()
+                            .to(endpoints::blockchain::create_collect_fee_instruction_endpoint),
+                    )
+                    .route(
+                        "/blockchain/fees/withdraw",
+                        web::post().to(
+                            endpoints::blockchain::create_withdraw_system_fees_instruction_endpoint,
+                        ),
+                    )
+                    .route(
+                        "/blockchain/clearing/fees/confirm",
+                        web::post().to(endpoints::blockchain::confirm_clearing_fees_collected),
+                    )
+                    .route(
+                        "/blockchain/escrow/balance",
+                        web::get().to(endpoints::blockchain::get_escrow_balance),
                     ),
             )
     })

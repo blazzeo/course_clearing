@@ -87,6 +87,7 @@ pub struct Settlement {
     pub from_address: String,
     pub to_address: String,
     pub amount: i64,
+    pub fee_paid: bool,
     pub tx_signature: String,
     pub created_at: DateTime<Utc>,
 }
@@ -106,10 +107,12 @@ pub struct PayRequest {
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct SystemSetting {
     pub id: i32,
-    pub key: String,
-    pub value: String,
-    pub description: Option<String>,
-    pub created_at: DateTime<Utc>,
+    // Комиссии
+    pub clearing_fee: f32,
+    pub transaction_fee: f32,
+    pub deposit_fee: f32,
+    pub withdrawal_fee: f32,
+    // Время обновления
     pub updated_at: DateTime<Utc>,
 }
 
@@ -138,9 +141,17 @@ pub struct UpdateProfileRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateSystemSettingsRequest {
-    pub key: String,
-    pub value: String,
-    pub description: Option<String>,
+    // Правила клиринга
+    pub clearing_min_participants: Option<i32>,
+    pub clearing_max_amount: Option<i64>,
+    // Комиссии
+    pub clearing_fee: Option<f32>,
+    pub transaction_fee: Option<f32>,
+    pub deposit_fee: Option<f32>,
+    pub withdrawal_fee: Option<f32>,
+    // Лимиты
+    pub daily_transaction_limit: Option<i64>,
+    pub monthly_volume_limit: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -195,6 +206,18 @@ pub struct ConfirmWithdrawalRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct CollectFeeRequest {
+    pub amount: u64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WithdrawFeesRequest {
+    pub amount: u64,
+    pub recipient: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CompleteWithdrawalRequest {
     pub user_address: String,
     pub withdrawal_pda: String,
@@ -205,6 +228,12 @@ pub struct CompleteWithdrawalRequest {
 pub struct BlockchainBalanceResponse {
     pub blockchain_balance: u64,
     pub contract_balance: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EscrowBalanceResponse {
+    pub total_locked: i64,
+    pub system_fees_collected: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -230,4 +259,13 @@ impl<T> ApiResponse<T> {
             error: Some(message),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParticipantStatus {
+    pub address: String,
+    pub balance: i64,
+    pub outstanding_fees: i64,
+    pub is_blocked: bool,
+    pub total_debt: i64,
 }

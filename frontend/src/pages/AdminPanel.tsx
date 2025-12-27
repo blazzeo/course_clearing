@@ -56,6 +56,7 @@ export default function AdminPanel() {
 	const [editingSettings, setEditingSettings] = useState<Partial<SystemSetting>>({})
 	const [isEditing, setIsEditing] = useState(false)
 	const [escrowBalance, setEscrowBalance] = useState<{ total_locked: number, system_fees_collected: number } | null>(null)
+	const [withdrawModal, setWithdrawModal] = useState<{ amount: string, recipient: string } | null>(null)
 
 	const [roleFilter, setRoleFilter] = useState<'all' | string>('all')
 	const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
@@ -215,6 +216,72 @@ export default function AdminPanel() {
 		} catch (error) {
 			console.error('Error loading escrow balance:', error)
 			toast.error('Ошибка при загрузке баланса escrow')
+		}
+	}
+
+	const withdrawFees = async (amountStr: string, recipientStr: string) => {
+		if (!publicKey) {
+			toast.error('Подключите кошелек')
+			return
+		}
+
+		try {
+			setActionLoading(true)
+
+			const amount = Math.floor(parseFloat(amountStr) * 1e9) // Конвертируем SOL в lamports
+
+			if (amount <= 0) {
+				toast.error('Неверная сумма')
+				return
+			}
+
+			if (!escrowBalance || amount > escrowBalance.system_fees_collected) {
+				toast.error('Недостаточно комиссий для вывода')
+				return
+			}
+
+			// Получаем инструкцию от бэкенда
+			const withdrawResponse = await axios.post(`${API_URL}/api/blockchain/fees/withdraw?address=${publicKey.toBase58()}`, {
+				amount: amount,
+				recipient: recipientStr
+			})
+
+			if (!withdrawResponse.data.success) {
+				throw new Error('Не удалось получить инструкцию для вывода комиссий')
+			}
+
+			const instructionData = withdrawResponse.data.data.instruction
+
+			// Создаем инструкцию
+			const instruction = new TransactionInstruction({
+				programId: new PublicKey(instructionData.program_id),
+				keys: instructionData.accounts.map((acc: any) => ({
+					pubkey: new PublicKey(acc.pubkey),
+					isSigner: acc.is_signer,
+					isWritable: acc.is_writable,
+				})),
+				data: Buffer.from(instructionData.data),
+			})
+
+			const tx = new Transaction().add(instruction)
+
+			// Получаем свежий blockhash
+			const connection = new Connection(RPC_URL, "confirmed")
+			const { blockhash } = await connection.getLatestBlockhash()
+			tx.recentBlockhash = blockhash
+
+			// Отправляем транзакцию
+			await sendTransaction(tx, connection)
+
+			toast.success('Комиссии успешно выведены!')
+			setWithdrawModal(null)
+			loadEscrowBalance() // Обновляем баланс
+
+		} catch (error: any) {
+			console.error('Error withdrawing fees:', error)
+			toast.error(error.response?.data?.error || 'Ошибка при выводе комиссий')
+		} finally {
+			setActionLoading(false)
 		}
 	}
 
@@ -731,6 +798,23 @@ export default function AdminPanel() {
 									<div style={{ fontSize: '18px', fontWeight: 'bold', color: '#e65100' }}>
 										{(escrowBalance.system_fees_collected / 1e9).toFixed(4)} SOL
 									</div>
+									{escrowBalance.system_fees_collected > 0 && (
+										<button
+											style={{
+												marginTop: '8px',
+												padding: '4px 8px',
+												background: '#ff9800',
+												color: 'white',
+												border: 'none',
+												borderRadius: '4px',
+												cursor: 'pointer',
+												fontSize: '12px'
+											}}
+											onClick={() => setWithdrawModal({ amount: '', recipient: '' })}
+										>
+											💰 Вывести
+										</button>
+									)}
 								</div>
 							</div>
 						) : (
@@ -1132,6 +1216,103 @@ export default function AdminPanel() {
 								</table>
 							</div>
 						)}
+					</div>
+				</div>
+			)}
+
+			{/* Модальное окно вывода комиссий */}
+			{withdrawModal && (
+				<div style={{
+					position: 'fixed',
+					top: 0,
+					left: 0,
+					right: 0,
+					bottom: 0,
+					background: 'rgba(0,0,0,0.5)',
+					display: 'flex',
+					alignItems: 'center',
+					justifyContent: 'center',
+					zIndex: 1000
+				}}>
+					<div style={{
+						background: 'white',
+						padding: '24px',
+						borderRadius: '8px',
+						boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+						minWidth: '400px'
+					}}>
+						<h3 style={{ marginTop: 0, color: '#e65100' }}>💰 Вывод комиссий</h3>
+						<p>Доступно для вывода: <strong>{escrowBalance ? (escrowBalance.system_fees_collected / 1e9).toFixed(4) : '0'} SOL</strong></p>
+
+						<div style={{ marginBottom: '16px' }}>
+							<label style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>
+								Сумма (SOL):
+							</label>
+							<input
+								type="number"
+								step="0.0001"
+								value={withdrawModal.amount}
+								onChange={(e) => setWithdrawModal({ ...withdrawModal, amount: e.target.value })}
+								style={{
+									width: '100%',
+									padding: '8px',
+									border: '1px solid #ddd',
+									borderRadius: '4px',
+									fontSize: '16px'
+								}}
+								placeholder="0.0000"
+							/>
+						</div>
+
+						<div style={{ marginBottom: '20px' }}>
+							<label style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>
+								Адрес получателя:
+							</label>
+							<input
+								type="text"
+								value={withdrawModal.recipient}
+								onChange={(e) => setWithdrawModal({ ...withdrawModal, recipient: e.target.value })}
+								style={{
+									width: '100%',
+									padding: '8px',
+									border: '1px solid #ddd',
+									borderRadius: '4px',
+									fontSize: '14px',
+									fontFamily: 'monospace'
+								}}
+								placeholder="Solana адрес"
+							/>
+						</div>
+
+						<div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+							<button
+								onClick={() => setWithdrawModal(null)}
+								style={{
+									padding: '8px 16px',
+									background: '#f5f5f5',
+									color: '#333',
+									border: '1px solid #ddd',
+									borderRadius: '4px',
+									cursor: 'pointer'
+								}}
+							>
+								Отмена
+							</button>
+							<button
+								onClick={() => withdrawFees(withdrawModal.amount, withdrawModal.recipient)}
+								disabled={actionLoading || !withdrawModal.amount || !withdrawModal.recipient}
+								style={{
+									padding: '8px 16px',
+									background: actionLoading ? '#ccc' : '#ff9800',
+									color: 'white',
+									border: 'none',
+									borderRadius: '4px',
+									cursor: actionLoading || !withdrawModal.amount || !withdrawModal.recipient ? 'not-allowed' : 'pointer'
+								}}
+							>
+								{actionLoading ? 'Обработка...' : 'Вывести'}
+							</button>
+						</div>
 					</div>
 				</div>
 			)}

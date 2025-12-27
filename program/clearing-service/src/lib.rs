@@ -279,6 +279,38 @@ pub mod clearing_service {
     pub fn get_withdrawal_nonce(ctx: Context<GetWithdrawalNonce>) -> Result<u64> {
         Ok(ctx.accounts.participant.withdrawal_nonce)
     }
+
+    /// Вывод системных комиссий (только администратор)
+    pub fn withdraw_system_fees(ctx: Context<WithdrawSystemFees>, amount: u64) -> Result<()> {
+        let escrow = &mut ctx.accounts.escrow;
+
+        // Проверяем, что вызывающий - администратор escrow
+        require!(
+            escrow.authority == ctx.accounts.authority.key(),
+            ClearingError::Unauthorized
+        );
+
+        // Проверяем, что достаточно комиссий
+        require!(
+            escrow.system_fees_collected >= amount as i64,
+            ClearingError::InsufficientFunds
+        );
+
+        // Перевод средств с escrow на получателя
+        **escrow.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.recipient.to_account_info().try_borrow_mut_lamports()? += amount;
+
+        // Обновляем счетчик комиссий
+        escrow.system_fees_collected -= amount as i64;
+
+        msg!(
+            "System fees withdrawn: {} lamports to {}",
+            amount,
+            ctx.accounts.recipient.key()
+        );
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -495,6 +527,19 @@ pub struct Withdrawal {
 
 impl Withdrawal {
     pub const LEN: usize = 32 + 8 + 1 + 8 + 8 + 8 + 8 + 1; // participant + amount + status + requested_at + approved_at + completed_at + nonce + bump
+}
+
+#[derive(Accounts)]
+pub struct WithdrawSystemFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"escrow"],
+        bump = escrow.bump
+    )]
+    pub escrow: Account<'info, Escrow>,
+    #[account(mut)]
+    pub recipient: SystemAccount<'info>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
