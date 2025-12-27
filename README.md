@@ -44,6 +44,7 @@
 - Rust (для локальной разработки)
 - Node.js 20+ (для локальной разработки фронтенда)
 - Anchor CLI (для работы с Solana программой)
+- Make (для удобного управления проектом)
 
 ## Установка и запуск
 
@@ -54,24 +55,71 @@ git clone <repository-url>
 cd course
 ```
 
-### 2. Запуск через Docker Compose
+### 2. Настройка домена и SSL (опционально для HTTPS)
 
+#### Настройка домена:
 ```bash
+sudo ./setup-hosts.sh
+```
+
+#### Настройка SSL сертификатов:
+```bash
+# Для локальной разработки (самоподписанные)
+./setup-ssl.sh
+
+# Для продакшена с реальным доменом
+# Измените DOMAIN в setup-ssl.sh и запустите с sudo
+```
+
+#### Решение проблем с SSL:
+Если браузер показывает "Not Secure", добавьте исключение:
+1. Нажмите на замочек 🔒 в адресной строке
+2. Выберите "Not Secure" → "Advanced"
+3. Нажмите "Proceed to clearing.local (unsafe)"
+
+Или переключитесь на HTTP для тестирования:
+```bash
+make http  # Переключает на HTTP режим
+```
+
+Если API запросы не работают после изменений переменных окружения:
+```bash
+# Пересоберите frontend с новыми переменными
+docker-compose build frontend
 docker-compose up -d
 ```
 
-Это запустит все необходимые сервисы:
-- PostgreSQL на порту 5432
-- Solana validator на порту 8899
-- Rust API на порту 8080
-- React фронтенд на порту 3000
-- Nginx на порту 80
+Или используйте make:
+```bash
+make setup  # Настройка hosts
+```
 
-### 3. Доступ к сервисам
+### 3. Запуск через Docker Compose или Make
 
+#### Через Make (рекомендуется):
+```bash
+make up        # Продакшен с HTTPS
+make up-dev    # Разработка с HTTP
+make down      # Остановить
+make logs      # Логи всех сервисов
+make clean     # Полная очистка
+```
+
+#### Через Docker Compose:
+```bash
+docker-compose --profile web up -d     # Продакшен с HTTPS
+docker-compose --profile all up -d     # Разработка с HTTP
+```
+
+### 4. Доступ к сервисам
+
+#### HTTPS (продакшен):
+- **Веб-интерфейс**: https://clearing.local
+- **API**: https://clearing.local/api
+
+#### HTTP (разработка):
 - **Веб-интерфейс**: http://localhost:80 или http://localhost:3000
-- **API**: http://localhost:8080/api
-- **Solana RPC**: http://localhost:8899
+- **API**: http://localhost:8001/api
 - **PostgreSQL**: localhost:5432
 
 ### 4. Инициализация базы данных
@@ -139,9 +187,19 @@ course/
 │       ├── App.tsx
 │       ├── components/
 │       └── pages/
-├── nginx/                # Nginx конфигурация
-│   └── nginx.conf
+├── nginx/                # Nginx reverse proxy + SSL
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   ├── conf.d/
+│   │   └── default.conf
+│   └── ssl/
+│       ├── nginx.crt
+│       └── nginx.key
 ├── docker-compose.yml
+├── docker-compose.override.yml
+├── setup-hosts.sh        # Настройка домена
+├── setup-ssl.sh          # Настройка SSL
+├── Makefile             # Удобное управление
 └── README.md
 ```
 
@@ -205,12 +263,29 @@ course/
 - **Containerization**: Docker + Docker Compose
 - **Web Server**: Nginx
 
+## Быстрый старт
+
+```bash
+# 1. Настройка домена и SSL
+make setup
+
+# 2. Запуск сервисов
+make up          # Продакшен с HTTPS
+make up-dev      # Разработка с HTTP
+make http        # HTTP режим (без SSL)
+
+# 3. Доступ к сайту
+# HTTPS: https://clearing.local (добавьте исключение для сертификата)
+# HTTP:  http://localhost:80
+```
+
 ## Примечания
 
 - Проект использует локальную тестовую ноду Solana для разработки
 - Все транзакции выполняются в тестовой сети
 - Для продакшена необходимо настроить подключение к основной сети Solana
 - Валидация подписей транзакций должна быть реализована для полной безопасности
+- SSL сертификаты самоподписанные для разработки. Для продакшена используйте Let's Encrypt
 
 ## Лицензия
 

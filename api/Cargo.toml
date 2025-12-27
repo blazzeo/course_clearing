@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-clearing_service = { path = "../program/clearing-service/" }
+clearing_service = { path = "../program/clearing-service" }
 actix-web = "4.4"
 actix-cors = "0.6"
 # tokio = { version = "1.35", features = ["full"] }

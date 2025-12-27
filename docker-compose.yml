@@ -24,12 +24,14 @@ services:
   api:
     image: clearing-api
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./api/Dockerfile
     container_name: api
     environment:
-      DATABASE_URL: postgres://clearing_user:clearing_pass@api:5432/clearing_db
+      DATABASE_URL: postgres://clearing_user:clearing_pass@postgres:5432/clearing_db
       SOLANA_RPC_URL: https://api.devnet.solana.com
+      SQLX_OFFLINE: true
+      ADMIN_PUBKEY: 8gfe4k6Z5iwTxuWmXwPAnTBhDJd6Uo5xTi9kVhtUD49t
       RUST_LOG: info
       PORT: 8001
     ports:
@@ -42,23 +44,39 @@ services:
       - all
       - api
 
-  # nginx:
-  #   image: nginx:alpine
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: gateway
-  #   environment:
-  #       VITE_API_URL: http://localhost:8001/api
-  #       VITE_SOLANA_RPC_URL: https://api.devnet.solana.com
-  #   ports:
-  #     - "8000:80"
-  #   volumes:
-  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-  #     # - /dev/null:/etc/nginx/conf.d/default.conf
-  #   depends_on:
-  #     - api
-  #   restart: unless-stopped
+  frontend:
+    build:
+      context: ./frontend/
+      dockerfile: ./Dockerfile
+      args:
+        VITE_API_URL: https://clearing.local/api
+        VITE_SOLANA_RPC_URL: https://api.devnet.solana.com
+    container_name: frontend
+    environment:
+      VITE_API_URL: https://clearing.local/api
+      VITE_SOLANA_RPC_URL: https://api.devnet.solana.com
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles:
+      - all
+      - web
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    profiles:
+      - all
+      - web
 
   # solana:
   #   build:

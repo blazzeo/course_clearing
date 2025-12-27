@@ -116,15 +116,15 @@ pub mod clearing_service {
         );
 
         // Списываем комиссию с депозита
-        participant.balance -= amount as i64;
-        escrow.system_fees_collected += amount as i64;
+            participant.balance -= amount as i64;
+            escrow.system_fees_collected += amount as i64;
 
-        msg!(
+            msg!(
             "Fee paid: {} lamports for {} by {}",
-            amount,
-            reason,
-            participant.authority
-        );
+                amount,
+                reason,
+                participant.authority
+            );
 
         Ok(())
     }

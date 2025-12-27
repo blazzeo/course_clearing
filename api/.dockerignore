@@ -1,7 +1,56 @@
+# Rust build artifacts
 target/
+**/target/
+Cargo.lock
+
+# Program build artifacts (keep source, exclude build)
+../program/**/target/
+../program/**/*.so
+../program/**/*.a
+
+# Development files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Git
 .git/
 .gitignore
-*.rs.bk
 
+# Docker
+Dockerfile*
+.dockerignore
 
+# Documentation
+README.md
+docs/
 
+# Test files
+tests/
+*.test
+*_test.rs
+
+# Dependencies that should be downloaded
+node_modules/
+package-lock.json
+
+# Local development
+.dev/
+.cache/

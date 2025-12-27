@@ -82,21 +82,6 @@ pub async fn pay_settlement(
     }
 }
 
-pub async fn pay_settlement_fee(pool: web::Data<PgPool>, path: web::Path<i32>) -> impl Responder {
-    let id = path.into_inner();
-
-    let res = sqlx::query!("UPDATE settlements SET fee_paid=TRUE WHERE id=$1", id)
-        .execute(pool.get_ref())
-        .await;
-
-    match res {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::<String>::success("ok".into())),
-        Err(e) => {
-            HttpResponse::InternalServerError().json(ApiResponse::<String>::error(e.to_string()))
-        }
-    }
-}
-
 /// Получение общей информации о системе для гостей
 pub async fn get_system_info(pool: web::Data<PgPool>) -> impl Responder {
     // Получаем статистику системы

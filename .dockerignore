@@ -1,0 +1,55 @@
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development
+.env*
+!.env.example
+node_modules/
+*.log
+
+# Frontend build artifacts (keep source)
+frontend/dist/
+frontend/.vite/
+
+# Program build artifacts (keep source, exclude build)
+program/**/target/
+program/**/*.so
+program/**/*.a
+program/**/node_modules/
+
+# API build artifacts (exclude for rebuild)
+api/target/
+
+# Nginx SSL if using self-signed
+nginx/ssl/
+!nginx/ssl/*.crt
+!nginx/ssl/*.key
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Scripts
+*.sh
+Makefile
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Cursor
+.cursor/
+
