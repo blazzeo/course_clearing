@@ -2,7 +2,8 @@ use super::log::log_audit_action;
 use crate::auth_service::require_auth;
 use crate::models::{
     ApiResponse, ApproveWithdrawalRequest, BlockchainBalanceResponse, CompleteWithdrawalRequest,
-    ConfirmWithdrawalRequest, DepositFundsRequest, EscrowBalanceResponse, WithdrawalRequest,
+    ConfirmWithdrawalRequest, DepositFundsRequest, EscrowBalanceResponse, UpdateBalanceDepositRequest,
+    UpdateBalanceWithdrawalRequest, WithdrawalRequest,
 };
 use actix_web::{web, HttpResponse, Responder};
 use solana_sdk::pubkey::Pubkey;

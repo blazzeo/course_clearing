@@ -15,3 +15,4 @@ fi
 echo "Current hosts entry:"
 grep "clearing.local" /etc/hosts
 
+

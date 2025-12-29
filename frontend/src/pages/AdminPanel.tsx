@@ -858,7 +858,7 @@ export default function AdminPanel() {
 									{/* Комиссии */}
 									<div style={{ border: '1px solid #e0e0e0', borderRadius: '8px', padding: '16px' }}>
 										<h4 style={{ margin: '0 0 16px 0', color: '#388e3c' }}>💰 Комиссии</h4>
-										<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+										<div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
 											<div>
 												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
 													Клиринг (%)
@@ -881,72 +881,7 @@ export default function AdminPanel() {
 													}}
 												/>
 											</div>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Транзакция (%)
-												</label>
-												<input
-													type="number"
-													value={(editingSettings.transaction_fee || systemSettings.transaction_fee) * 100}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														transaction_fee: (parseFloat(e.target.value) || 0) / 1e9
-													})}
-													min="0"
-													step="0.000001"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Депозит (%)
-												</label>
-												<input
-													type="number"
-													value={((editingSettings.deposit_fee || systemSettings.deposit_fee) * 100)}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														deposit_fee: (parseFloat(e.target.value) || 0) / 100
-													})}
-													min="0"
-													max="100"
-													step="0.01"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
 
-											<div>
-												<label style={{ display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>
-													Вывод (%)
-												</label>
-												<input
-													type="number"
-													value={((editingSettings.withdrawal_fee || systemSettings.withdrawal_fee) * 100)}
-													onChange={(e) => setEditingSettings({
-														...editingSettings,
-														withdrawal_fee: (parseFloat(e.target.value) || 0) / 100
-													})}
-													min="0"
-													max="100"
-													step="0.01"
-													style={{
-														width: '100%',
-														padding: '8px 12px',
-														border: '1px solid #ccc',
-														borderRadius: '4px'
-													}}
-												/>
-											</div>
 										</div>
 									</div>
 
@@ -993,15 +928,6 @@ export default function AdminPanel() {
 											<div>
 												<strong>Клиринг:</strong> {(systemSettings.clearing_fee * 100).toFixed(2)}%
 											</div>
-											<div>
-												<strong>Транзакция:</strong> {(systemSettings.transaction_fee * 100).toFixed(2)}%
-											</div>
-											<div>
-												<strong>Депозит:</strong> {(systemSettings.deposit_fee * 100).toFixed(2)}%
-											</div>
-											<div>
-												<strong>Вывод:</strong> {(systemSettings.withdrawal_fee * 100).toFixed(2)}%
-											</div>
 										</div>
 									</div>
 
@@ -1043,11 +969,6 @@ export default function AdminPanel() {
 							>
 								{actionLoading ? 'Выполнение клиринга...' : 'Запустить клиринг'}
 							</button>
-							{actionLoading && (
-								<div style={{ marginTop: '8px', fontSize: '14px', color: '#666' }}>
-									Комиссии будут выполнены батчами по 10...
-								</div>
-							)}
 						</div>
 
 						{/* Инициализация escrow */}

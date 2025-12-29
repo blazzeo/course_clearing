@@ -119,16 +119,6 @@ export default function Positions() {
 		}
 	}
 
-	const handleClear = async (id: number) => {
-		try {
-			await axios.post(`${API_URL}/api/positions/${id}/clear`)
-			loadPositions()
-		} catch (error) {
-			console.error('Error clearing position:', error)
-			toast.error('Ошибка при выполнении клиринга')
-		}
-	}
-
 	const getStatusClass = (status: string) => {
 		switch (status) {
 			case 'pending':

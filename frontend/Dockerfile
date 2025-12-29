@@ -17,6 +17,9 @@ RUN npm run build
 
 FROM nginx:alpine
 
+# Копируем кастомную конфигурацию nginx
+COPY nginx.conf /etc/nginx/nginx.conf
+
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 CMD ["nginx", "-g", "daemon off;"]

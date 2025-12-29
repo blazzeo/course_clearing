@@ -1,5 +1,8 @@
 use crate::auth_service::require_auth;
-use crate::models::{ApiResponse, Withdrawal, WithdrawalParticipant};
+use crate::models::{
+    ApiResponse, UpdateBalanceDepositRequest, UpdateBalanceWithdrawalRequest, Withdrawal,
+    WithdrawalParticipant,
+};
 use actix_web::{web, HttpResponse, Responder};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -47,7 +50,7 @@ pub async fn get_all_balances(
     match balances {
         Ok(balances) => HttpResponse::Ok().json(ApiResponse::success(balances)),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<Vec<serde_json::Value>>::error(e.to_string())),
+            .json(ApiResponse::<Vec<BalancesOutput>>::error(e.to_string())),
     }
 }
 
@@ -177,4 +180,165 @@ pub async fn delete_withdrawal(
             ApiResponse::<Vec<WithdrawalParticipant>>::error(e.to_string()),
         ),
     }
+}
+
+/// Обновление баланса при депозите (после успешной транзакции)
+pub async fn update_balance_deposit(
+    pool: web::Data<PgPool>,
+    req: web::Json<UpdateBalanceDepositRequest>,
+) -> impl Responder {
+    // Проверяем, что участник существует и активен
+    let participant_exists = sqlx::query!(
+        "SELECT address FROM participants WHERE address = $1 AND is_active = true",
+        req.participant_address
+    )
+    .fetch_optional(pool.get_ref())
+    .await;
+
+    match participant_exists {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "Participant not found or inactive".to_string(),
+            ))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Database error: {}",
+                e
+            )))
+        }
+    }
+
+    // Обновляем баланс (увеличиваем)
+    match sqlx::query!(
+        "UPDATE participants SET balance = balance + $1, updated_at = NOW() WHERE address = $2",
+        req.amount_lamports,
+        req.participant_address
+    )
+    .execute(pool.get_ref())
+    .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Failed to update balance: {}",
+                e
+            )))
+        }
+    }
+
+    // Логируем действие
+    if let Err(e) = crate::endpoints::log::log_audit_action(
+        pool.get_ref(),
+        &req.participant_address,
+        "deposit",
+        "participants",
+        Some(&req.participant_address),
+        None,
+        Some(serde_json::json!({
+            "amount_lamports": req.amount_lamports,
+            "tx_signature": req.tx_signature
+        })),
+    )
+    .await
+    {
+        eprintln!("Failed to log audit action: {}", e);
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "message": "Balance updated successfully",
+        "amount_added": req.amount_lamports,
+        "tx_signature": req.tx_signature
+    })))
+}
+
+/// Обновление баланса при выводе средств (после успешной транзакции)
+pub async fn update_balance_withdrawal(
+    pool: web::Data<PgPool>,
+    req: web::Json<UpdateBalanceWithdrawalRequest>,
+) -> impl Responder {
+    // Проверяем, что участник существует и активен
+    let participant_exists = sqlx::query!(
+        "SELECT address, balance FROM participants WHERE address = $1 AND is_active = true",
+        req.participant_address
+    )
+    .fetch_optional(pool.get_ref())
+    .await;
+
+    let current_balance = match participant_exists {
+        Ok(Some(row)) => match row.balance {
+            Some(balance) => balance,
+            None => {
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                    "Participant not found or inactive".to_string(),
+                ))
+            }
+        },
+        Ok(None) => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "Participant not found or inactive".to_string(),
+            ))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Database error: {}",
+                e
+            )))
+        }
+    };
+
+    // Проверяем, что баланс достаточный
+    if current_balance < req.amount_lamports {
+        return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
+            "Insufficient balance. Current: {:?}, Required: {:?}",
+            current_balance, req.amount_lamports
+        )));
+    }
+
+    // Обновляем баланс (уменьшаем)
+    match sqlx::query!(
+        "UPDATE participants SET balance = balance - $1, updated_at = NOW() WHERE address = $2",
+        req.amount_lamports,
+        req.participant_address
+    )
+    .execute(pool.get_ref())
+    .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+                "Failed to update balance: {}",
+                e
+            )))
+        }
+    }
+
+    // Логируем действие
+    if let Err(e) = crate::endpoints::log::log_audit_action(
+        pool.get_ref(),
+        &req.participant_address,
+        "withdrawal",
+        "participants",
+        Some(&req.participant_address),
+        Some(serde_json::json!({
+            "balance": current_balance
+        })),
+        Some(serde_json::json!({
+            "balance": current_balance - req.amount_lamports,
+            "amount_lamports": req.amount_lamports,
+            "tx_signature": req.tx_signature
+        })),
+    )
+    .await
+    {
+        eprintln!("Failed to log audit action: {}", e);
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "message": "Balance updated successfully",
+        "amount_deducted": req.amount_lamports,
+        "tx_signature": req.tx_signature,
+        "new_balance": current_balance - req.amount_lamports
+    })))
 }

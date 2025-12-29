@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE participants SET balance = balance - $1, updated_at = NOW() WHERE address = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b403c50c5a473295faf2439c664c8a5ab8c6523721ce27702ab3794e2bfe55e"
+}

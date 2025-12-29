@@ -78,19 +78,5 @@ services:
       - all
       - web
 
-  # solana:
-  #   build:
-  #     context: ./program
-  #     dockerfile: Dockerfile
-  #   container_name: solana-anchor
-  #   volumes:
-  #     - ./program:/app
-  #     - solana-data:/root/.config/solana
-  #   # environment:
-  #   #   - ANCHOR_WALLET=/root/.config/solana/devnet.json
-  #   entrypoint: /bin/bash
-  #   tty: true
-
 volumes:
   postgres_data:
-  # solana-data:

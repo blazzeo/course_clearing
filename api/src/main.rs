@@ -225,6 +225,14 @@ async fn main() -> std::io::Result<()> {
                         web::get().to(endpoints::blockchain::get_participant_status),
                     )
                     .route(
+                        "/blockchain/balance/deposit/update",
+                        web::post().to(endpoints::funds::update_balance_deposit),
+                    )
+                    .route(
+                        "/blockchain/balance/withdrawal/update",
+                        web::post().to(endpoints::funds::update_balance_withdrawal),
+                    )
+                    .route(
                         "/blockchain/fees/collect",
                         web::post()
                             .to(endpoints::blockchain::create_collect_fee_instruction_endpoint),

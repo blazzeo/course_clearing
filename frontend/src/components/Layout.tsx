@@ -4,6 +4,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import axios from 'axios'
 import { API_URL } from '../App'
+import { toast } from 'react-toastify'
 
 interface LayoutProps {
 	children: ReactNode
@@ -41,10 +42,12 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 				await axios.post(`${API_URL}/api/auth/register-guest`, { address: userAddress });
 				onRoleUpdate('guest');
 				localStorage.setItem('userRole', 'guest');
+				toast.success('Вы успешно зарегистрированы!')
 			} else {
 				const role = res.data.data.user_type;
 				onRoleUpdate(role);
 				localStorage.setItem('userRole', role);
+				toast.success('Вход выполнен успешно!')
 			}
 		} catch (error) {
 			console.error('Error updating user role:', error);

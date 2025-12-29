@@ -164,6 +164,20 @@ pub struct DepositFundsRequest {
     pub amount: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateBalanceDepositRequest {
+    pub participant_address: String,
+    pub amount_lamports: i64,
+    pub tx_signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateBalanceWithdrawalRequest {
+    pub participant_address: String,
+    pub amount_lamports: i64,
+    pub tx_signature: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
 pub struct Withdrawal {
     pub id: i32,

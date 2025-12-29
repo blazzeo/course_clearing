@@ -38,6 +38,17 @@ export default function CreatePosition() {
 			return
 		}
 
+		if (counterparty == publicKey.toString()) {
+			toast.error('Вы не можете создать позицию с собой!')
+			return
+		}
+
+		if (parseFloat(amount) == 0) {
+			toast.error('Сумма не может быть 0!')
+			return
+		}
+
+
 		try {
 			setLoading(true)
 			const amountLamports = parseFloat(amount) * 1e9

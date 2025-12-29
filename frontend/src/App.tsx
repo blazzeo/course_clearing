@@ -18,6 +18,7 @@ import { Route, Routes } from 'react-router-dom'
 
 import { useWallet } from '@solana/wallet-adapter-react'
 import '@solana/wallet-adapter-react-ui/styles.css';
+import Participant from './pages/Participant'
 
 export const PROGRAM_ID: string = import.meta.env.VITE_PROGRAM_ID!;
 export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8001';
@@ -93,6 +94,14 @@ function App() {
 							<Profile />
 						</ProtectedRoute>
 					} />
+					<Route path="/participant/:address" element={
+						<ProtectedRoute
+							resource="/participant"
+							requireWallet={false}
+						>
+							<Participant />
+						</ProtectedRoute>
+					} />
 
 					{/* Защищенные маршруты для контрагентов */}
 					<Route path="/positions" element={
@@ -129,6 +138,15 @@ function App() {
 						<ProtectedRoute
 							requiredRoles={['counterparty', 'administrator']}
 							resource="/funds"
+							requireWallet={true}
+							userRole={userRole}
+						>
+							<Funds />
+						</ProtectedRoute>
+					} />
+					<Route path="/participant" element={
+						<ProtectedRoute
+							resource="/participant"
 							requireWallet={true}
 							userRole={userRole}
 						>
