@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("6N3d12ynnUC5r8pLbr95vmFQMzp6prcKRKd5SyZYWjkw");
+declare_id!("FcdZcBp3X8wGMCch7Yke3Q8ZTkMb3WqpBbLdcAtqZif");
 
 #[program]
 pub mod clearing_service {
@@ -116,15 +116,15 @@ pub mod clearing_service {
         );
 
         // Списываем комиссию с депозита
-            participant.balance -= amount as i64;
-            escrow.system_fees_collected += amount as i64;
+        participant.balance -= amount as i64;
+        escrow.system_fees_collected += amount as i64;
 
-            msg!(
+        msg!(
             "Fee paid: {} lamports for {} by {}",
-                amount,
-                reason,
-                participant.authority
-            );
+            amount,
+            reason,
+            participant.authority
+        );
 
         Ok(())
     }
@@ -194,11 +194,8 @@ pub mod clearing_service {
             ClearingError::InsufficientFunds
         );
 
-        // Сохраняем текущий nonce для использования в seeds
+        // Сохраняем текущий nonce для использования в seeds и данных
         let current_nonce = participant.withdrawal_nonce;
-
-        // Увеличиваем nonce для следующего withdrawal
-        participant.withdrawal_nonce = current_nonce.checked_add(1).unwrap();
 
         // Создаем запрос на вывод
         withdrawal.participant = participant.authority;
@@ -207,6 +204,9 @@ pub mod clearing_service {
         withdrawal.requested_at = current_time;
         withdrawal.nonce = current_nonce; // Сохраняем использованный nonce
         withdrawal.bump = ctx.bumps.withdrawal;
+
+        // Увеличиваем nonce ПОСЛЕ создания аккаунта
+        participant.withdrawal_nonce = current_nonce.checked_add(1).unwrap();
 
         msg!(
             "Withdrawal requested: {} lamports by {}",
@@ -298,7 +298,11 @@ pub mod clearing_service {
 
         // Перевод средств с escrow на получателя
         **escrow.to_account_info().try_borrow_mut_lamports()? -= amount;
-        **ctx.accounts.recipient.to_account_info().try_borrow_mut_lamports()? += amount;
+        **ctx
+            .accounts
+            .recipient
+            .to_account_info()
+            .try_borrow_mut_lamports()? += amount;
 
         // Обновляем счетчик комиссий
         escrow.system_fees_collected -= amount as i64;

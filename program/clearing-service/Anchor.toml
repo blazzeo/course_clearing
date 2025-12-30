@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-clearing_service = "6N3d12ynnUC5r8pLbr95vmFQMzp6prcKRKd5SyZYWjkw"
+clearing_service = "FcdZcBp3X8wGMCch7Yke3Q8ZTkMb3WqpBbLdcAtqZif"
 
 [registry]
 url = "https://api.apr.dev"

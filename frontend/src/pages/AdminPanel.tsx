@@ -260,7 +260,7 @@ export default function AdminPanel() {
 					isSigner: acc.is_signer,
 					isWritable: acc.is_writable,
 				})),
-				data: Buffer.from(instructionData.data),
+				data: Uint8Array.from(instructionData.data) as Buffer,
 			})
 
 			const tx = new Transaction().add(instruction)
@@ -285,7 +285,7 @@ export default function AdminPanel() {
 		}
 	}
 
-	const approveWithdrawal = async (participantAddress: string, withdrawalPda?: String) => {
+	const approveWithdrawal = async (participantAddress: string, amount: number, withdrawalPda?: String) => {
 		if (!publicKey) {
 			toast.error('Подключите кошелек')
 			return
@@ -350,6 +350,13 @@ export default function AdminPanel() {
 						withdrawal_pda: withdrawalPda,
 						tx_signature: signature
 					})
+
+					// Обновляем баланс после вывода
+					await axios.post(`${API_URL}/api/blockchain/balance/withdrawal/update`, {
+						participant_address: participantAddress,
+						amount_lamports: amount,
+						tx_signature: signature
+					});
 				} catch (completeError) {
 					console.error('Error completing withdrawal in DB:', completeError)
 					toast.warning('Транзакция выполнена, но статус в БД может не обновиться')
@@ -1115,7 +1122,7 @@ export default function AdminPanel() {
 												<td style={{ padding: '12px' }}>
 													{withdrawal.status === 'pending' && (
 														<button
-															onClick={() => approveWithdrawal(withdrawal.participant, withdrawal.pda)}
+															onClick={() => approveWithdrawal(withdrawal.participant, withdrawal.amount, withdrawal.pda)}
 															disabled={actionLoading}
 															style={{
 																padding: '6px 12px',

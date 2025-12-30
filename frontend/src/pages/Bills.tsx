@@ -93,7 +93,7 @@ export default function Bills() {
 					isSigner: acc.is_signer,
 					isWritable: acc.is_writable,
 				})),
-				data: Buffer.from(instructionData.data),
+				data: Uint8Array.from(instructionData.data) as Buffer,
 			})
 
 			const tx = new Transaction().add(instruction)

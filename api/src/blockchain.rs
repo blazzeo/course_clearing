@@ -16,7 +16,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "6N3d12ynnUC5r8pLbr95vmFQMzp6prcKRKd5SyZYWjkw";
+const PROGRAM_ID: &str = "FcdZcBp3X8wGMCch7Yke3Q8ZTkMb3WqpBbLdcAtqZif";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {
@@ -151,7 +151,7 @@ impl BlockchainClient {
         // Пропускаем discriminator (первые 8 байт) и authority (32 байта),
         // затем balance (8 байт), bump (1 байт), и получаем withdrawal_nonce (8 байт)
         let data = &account_data[8..]; // Пропускаем discriminator
-        let nonce_offset = 32 + 8 + 1; // authority + balance + bump
+        let nonce_offset = 32 + 8 + 8 + 1 + 1; // authority + balance + bump
         let nonce_bytes = &data[nonce_offset..nonce_offset + 8];
         let nonce = u64::from_le_bytes(
             nonce_bytes

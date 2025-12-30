@@ -649,7 +649,7 @@ export default function AuditorPanel() {
 															{formatAddress(balance.address)}
 														</td>
 														<td style={{ padding: '12px', fontWeight: 'bold' }}>
-															{balance.balance.toFixed(4)}
+															{(balance.balance / 1e9).toFixed(4)} SOL
 														</td>
 														<td style={{ padding: '12px' }}>{balance.user_type}</td>
 														<td style={{ padding: '12px' }}>{formatDate(balance.updated_at)}</td>
