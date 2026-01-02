@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("FcdZcBp3X8wGMCch7Yke3Q8ZTkMb3WqpBbLdcAtqZif");
+declare_id!("2XUmdfmk9tycEb1uk6aem8NfcPeAageZs3Bq9T4zvJ3g");
 
 #[program]
 pub mod clearing_service {

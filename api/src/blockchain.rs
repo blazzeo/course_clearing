@@ -16,7 +16,7 @@ use solana_sdk::{
 use std::str::FromStr;
 
 // Program ID смарт-контракта
-const PROGRAM_ID: &str = "FcdZcBp3X8wGMCch7Yke3Q8ZTkMb3WqpBbLdcAtqZif";
+const PROGRAM_ID: &str = "2XUmdfmk9tycEb1uk6aem8NfcPeAageZs3Bq9T4zvJ3g";
 const SYSTEM_PROGRAM_ID: Pubkey = Pubkey::from_str_const("11111111111111111111111111111111");
 
 pub struct BlockchainClient {

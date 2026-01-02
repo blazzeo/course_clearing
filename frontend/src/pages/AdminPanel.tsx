@@ -1015,7 +1015,7 @@ export default function AdminPanel() {
 														isSigner: acc.is_signer,
 														isWritable: acc.is_writable
 													})),
-													data: new Uint8Array(instructionData.data) as Buffer,
+													data: Uint8Array.from(instructionData.data) as Buffer,
 												});
 
 												const connection = new Connection(RPC_URL, "confirmed");
@@ -1033,6 +1033,7 @@ export default function AdminPanel() {
 										}
 									} catch (error: any) {
 										toast.error(error.response?.data?.error || 'Ошибка при инициализации escrow');
+										console.error(error)
 									} finally {
 										setActionLoading(false);
 									}
