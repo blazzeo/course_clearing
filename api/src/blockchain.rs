@@ -46,7 +46,7 @@ impl BlockchainClient {
         let (participant_pda, _) = self.get_participant_pda(authority).await;
 
         match self.client.get_account(&participant_pda).await {
-            Ok(_) => Ok(true), // Аккаунт существует
+            Ok(_) => Ok(true),   // Аккаунт существует
             Err(_) => Ok(false), // Аккаунт не найден
         }
     }
