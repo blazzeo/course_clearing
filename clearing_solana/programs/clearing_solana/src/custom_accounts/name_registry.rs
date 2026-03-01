@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+/// Account for saving users' names,
+/// uses can occupy name, so next will see it is used
 #[account]
 pub struct NameRegistry {
     pub name_bytes: [u8; 32],

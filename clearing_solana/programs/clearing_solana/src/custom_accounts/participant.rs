@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+/// Participant of system, can be Admin, User, Officer(Observer)
 #[account]
 pub struct Participant {
     pub authority: Pubkey,

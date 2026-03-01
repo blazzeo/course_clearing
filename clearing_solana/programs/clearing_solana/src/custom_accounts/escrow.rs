@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+/// Account for getting commissions from users of system
+/// Only admin can create this account (he is the owner)
 #[account]
 pub struct Escrow {
     pub authority: Pubkey,

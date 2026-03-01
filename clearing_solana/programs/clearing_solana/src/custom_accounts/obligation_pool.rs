@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+/// Pool to keep obligations in one place,
+/// has references to neighbour Pools
 #[account]
 pub struct ObligationPool {
     pub authority: Pubkey,

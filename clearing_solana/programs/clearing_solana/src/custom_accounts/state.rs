@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+/// Account for general state of system
 #[account]
 pub struct ClearingState {
     pub authority: Pubkey,

@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+/// Main account of Pools, have reference to Root Pool,
+/// which is the main pool
 #[account]
 pub struct PoolManager {
     pub authority: Pubkey,

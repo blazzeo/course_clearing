@@ -1,5 +1,10 @@
 use anchor_lang::prelude::{clock::UnixTimestamp, *};
 
+/// Obligation from participant A to participant B
+/// After creation it will be sticked to Pool X
+/// session_id is 0 by default, but will be assigned to X on clearing session
+/// from and to cancel flags are for cancelation before clearing session,
+/// after cancelation obligation will be removed from Pool
 #[account]
 pub struct Obligation {
     pub status: ObligationStatus,

@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+/// Result of netting sessions
 #[account]
 pub struct NettingSessionResult {
     pub id: u64,

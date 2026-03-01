@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+/// Object of session, maily used for statistics
 #[account]
 pub struct NettingSession {
     pub session_id: u64,
