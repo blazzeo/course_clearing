@@ -25,6 +25,8 @@ pub struct UpdateUserType<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to change user's type
+/// Can only be invoked by admin
 pub fn update_user_type(ctx: Context<UpdateUserType>, user_type: UserType) -> Result<()> {
     let target = &mut ctx.accounts.target_participant;
     let admin = &ctx.accounts.admin;

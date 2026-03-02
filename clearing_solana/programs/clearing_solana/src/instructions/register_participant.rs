@@ -28,6 +28,7 @@ pub struct RegisterParticipant<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to register new participant
 pub fn register_participant(ctx: Context<RegisterParticipant>, name: String) -> Result<()> {
     let clock = Clock::get()?;
 

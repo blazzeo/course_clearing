@@ -38,6 +38,7 @@ pub struct DeclineObligation<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to decline obligation if 'from participant' disagree with conditions
 pub fn decline_obligation(ctx: Context<DeclineObligation>) -> Result<()> {
     let clock = Clock::get()?;
 

@@ -19,6 +19,7 @@ pub struct WithdrawFee<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to Withdraw fee, can be invoked only by owner of escrow account(admin)
 pub fn withdraw_fee(ctx: Context<WithdrawFee>, amount: u64) -> Result<()> {
     let clock = Clock::get()?;
 

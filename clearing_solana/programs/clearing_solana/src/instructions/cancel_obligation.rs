@@ -37,11 +37,16 @@ pub struct CancelObligation<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method must be called by both participants of obligation.
+/// Each will interact only with his 'cancel flag'.
+/// When both flags are true - only then obligation is considered as 'Canceled'.
 pub fn cancel_obligation(ctx: Context<CancelObligation>) -> Result<()> {
+    // Get time for timestamp
     let clock = Clock::get()?;
 
     let obligation = &mut ctx.accounts.obligation;
 
+    // Check for proper obligation status
     require!(
         obligation.status == ObligationStatus::Created
             || obligation.status == ObligationStatus::Confirmed,
@@ -74,6 +79,7 @@ pub fn cancel_obligation(ctx: Context<CancelObligation>) -> Result<()> {
         from_participant.update_timestamp = clock.unix_timestamp;
     }
 
+    //  Check for both confirmations
     if obligation.to_cancel && obligation.from_cancel {
         obligation.status = ObligationStatus::Cancelled;
 

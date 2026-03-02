@@ -27,6 +27,10 @@ pub struct CreateNewPool<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method that would be called when all the extisting pools are full.
+/// This method would be called by last participant,
+/// He will see a choice to pay for new pool, or wait till some pool is free
+/// Only after his confirmation to pay for pool this method is invoked
 pub fn create_new_pool(ctx: Context<CreateNewPool>, last_pool_id: u32) -> Result<()> {
     let clock = Clock::get()?;
 

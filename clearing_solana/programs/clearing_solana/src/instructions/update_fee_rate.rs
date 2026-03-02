@@ -28,6 +28,8 @@ pub struct UpdateFeeRate<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to update fee rate,
+/// must be invoked by admin
 pub fn update_fee_rate(ctx: Context<UpdateFeeRate>, new_rate_bps: u64) -> Result<()> {
     let clock = Clock::get()?;
 

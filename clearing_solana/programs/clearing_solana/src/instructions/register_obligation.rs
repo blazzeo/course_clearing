@@ -34,6 +34,7 @@ pub struct RegisterObligation<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to create new obligation(from-to-amount)
 pub fn register_obligation(
     ctx: Context<RegisterObligation>,
     from: Pubkey,

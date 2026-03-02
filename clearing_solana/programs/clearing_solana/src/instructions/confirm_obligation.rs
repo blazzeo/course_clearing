@@ -38,6 +38,7 @@ pub struct ConfirmObligation<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to get configrmation by 'from participant' (the one that will have to pay obligation).
 pub fn confirm_obligation(ctx: Context<ConfirmObligation>) -> Result<()> {
     let clock = Clock::get()?;
 

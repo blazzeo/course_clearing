@@ -29,6 +29,8 @@ pub struct InitEscrow<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to init escrow account
+/// Must be invoked by admin
 pub fn init_escrow(ctx: Context<InitEscrow>) -> Result<()> {
     let clock = Clock::get()?;
 

@@ -27,6 +27,7 @@ pub struct CreatePoolManager<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to create pool manager(dispatcher)
 pub fn create_pool_manager(ctx: Context<CreatePoolManager>) -> Result<()> {
     let root_pool = &mut ctx.accounts.root_pool;
     root_pool.id = 0;

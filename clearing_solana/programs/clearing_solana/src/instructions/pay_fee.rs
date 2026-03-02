@@ -42,6 +42,7 @@ pub struct PayFee<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Method to pay fee of the session
 pub fn pay_fee(ctx: Context<PayFee>, session_id: u64) -> Result<()> {
     let clock = Clock::get()?;
 
