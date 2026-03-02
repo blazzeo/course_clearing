@@ -77,7 +77,7 @@ impl ObligationPool {
         self.occupied_count == Self::MAX_OBLIGATIONS as u8
     }
 
-    pub fn pda(index: i32) -> (Pubkey, u8) {
+    pub fn pda(index: u32) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"pool", &index.to_le_bytes()], &crate::ID)
     }
 }

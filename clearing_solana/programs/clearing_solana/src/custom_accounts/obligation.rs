@@ -12,25 +12,15 @@ pub struct Obligation {
     pub to: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
-    pub session_id: u64, // default 0 (no session_id is linked at first)
+    pub session_id: Option<u64>, // default None (no session_id is linked at first)
     pub from_cancel: bool,
     pub to_cancel: bool,
-    pub pool_id: u8,
+    pub pool_id: u32,
     pub bump: u8,
 }
 
 impl Obligation {
-    pub const LEN: usize = 8 + // descriminator
-        1 + // status
-        32 + // from
-        32 + // to
-        8 + // amount
-        8 + // timestamp
-        8 + // session_id
-        1 + // from_cancel
-        1 + // to_cancel
-        1 + // pool_id
-        1; // bump
+    pub const LEN: usize = std::mem::size_of::<Self>();
 
     // TODO: OR linked-list to connect from-to-session_id obligations OR from-to-timestamp
     pub fn pda(from: Pubkey, to: Pubkey, timestamp: UnixTimestamp) -> (Pubkey, u8) {
@@ -46,7 +36,7 @@ impl Obligation {
     }
 
     pub fn set_session(&mut self, session_id: u64) {
-        self.session_id = session_id;
+        self.session_id = Some(session_id);
     }
 
     pub fn update_status(&mut self, status: ObligationStatus) {

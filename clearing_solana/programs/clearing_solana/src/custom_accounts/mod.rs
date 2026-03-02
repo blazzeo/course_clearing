@@ -1,8 +1,9 @@
 pub mod clearing_engine;
+pub mod clearing_session;
+pub mod clearing_session_result;
 pub mod escrow;
 pub mod name_registry;
-pub mod netting_session;
-pub mod netting_session_result;
+pub mod net_position;
 pub mod obligation;
 pub mod obligation_pool;
 pub mod participant;
@@ -11,10 +12,11 @@ pub mod session_fee;
 pub mod state;
 
 pub use clearing_engine::*;
+pub use clearing_session::*;
+pub use clearing_session_result::*;
 pub use escrow::*;
 pub use name_registry::*;
-pub use netting_session::*;
-pub use netting_session_result::*;
+pub use net_position::*;
 pub use obligation::*;
 pub use obligation_pool::*;
 pub use participant::*;
