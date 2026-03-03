@@ -33,32 +33,23 @@ pub struct UpdateParticipantLastSessionId<'info> {
 
 pub fn update_participant_last_session_id(
     ctx: Context<UpdateParticipantLastSessionId>,
-    session_id: u64,
 ) -> Result<()> {
-    let clearing_state = &ctx.accounts.state;
-
-    require!(
-        clearing_state.total_sessions == session_id,
-        SessionIdError::InvalidId
-    );
+    let state = &ctx.accounts.state;
 
     let participant = &mut ctx.accounts.participant;
 
     require!(
-        participant.last_session_id < session_id,
+        participant.last_session_id < state.total_sessions,
         SessionIdError::SessionIdNotGreater
     );
 
-    participant.last_session_id = session_id;
+    participant.last_session_id = state.total_sessions;
 
     Ok(())
 }
 
 #[error_code]
 pub enum SessionIdError {
-    #[msg("Invalid Session Id provided")]
-    InvalidId,
-
     #[msg("Session Id must be greater than previous")]
     SessionIdNotGreater,
 }

@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+use crate::errors::CustomErrors;
+
 /// Pool to keep obligations in one place,
 /// has references to neighbour Pools
 #[account]
@@ -27,33 +29,35 @@ impl ObligationPool {
         1; // bump
 
     /// Returns id of Pool
-    pub fn add_obligation(&mut self, obligation_pubkey: Pubkey) -> Result<u32> {
+    pub fn add_obligation(&mut self, obligation_pubkey: Pubkey) -> Result<()> {
         for i in 0..Self::MAX_OBLIGATIONS {
             if !self.occupied[i] {
                 self.occupied[i] = true;
                 self.obligations[i] = obligation_pubkey;
                 self.occupied_count
                     .checked_add(1)
-                    .ok_or(ObligationPoolError::MathOverflow)?;
+                    .ok_or(CustomErrors::MathOverflow)?;
 
-                return Ok(self.id);
+                return Ok(());
             }
         }
 
-        Err(ObligationPoolError::PoolFull.into())
+        Err(PoolError::PoolFull.into())
     }
 
     pub fn remove_obligation_nth(&mut self, index: usize) -> Result<()> {
+        require!(index < Self::MAX_OBLIGATIONS, PoolError::InvalidIndex);
+        require!(self.occupied[index] == true, PoolError::SlotEmpty);
         require!(
-            index < Self::MAX_OBLIGATIONS,
-            ObligationPoolError::InvalidIndex
+            self.obligations[index] == Pubkey::default(),
+            PoolError::SlotEmpty
         );
-        require!(self.occupied[index] == true, ObligationPoolError::SlotEmpty);
 
         self.occupied[index] = false;
+        self.obligations[index] = Pubkey::default();
         self.occupied_count
             .checked_sub(1)
-            .ok_or(ObligationPoolError::MathOverflow)?;
+            .ok_or(CustomErrors::MathOverflow)?;
 
         Ok(())
     }
@@ -62,15 +66,16 @@ impl ObligationPool {
         for i in 0..Self::MAX_OBLIGATIONS {
             if self.obligations[i] == obligation {
                 self.occupied[i] = false;
+                self.obligations[i] = Pubkey::default();
                 self.occupied_count
                     .checked_sub(1)
-                    .ok_or(ObligationPoolError::MathOverflow)?;
+                    .ok_or(CustomErrors::MathOverflow)?;
 
                 return Ok(());
             }
         }
 
-        Err(ObligationPoolError::NotFound.into())
+        Err(PoolError::NotFound.into())
     }
 
     pub fn is_full(&self) -> bool {
@@ -83,15 +88,13 @@ impl ObligationPool {
 }
 
 #[error_code]
-pub enum ObligationPoolError {
-    #[msg("Overflow error")]
-    MathOverflow,
+pub enum PoolError {
     #[msg("Pool is full")]
     PoolFull,
     #[msg("Invalid index")]
     InvalidIndex,
     #[msg("Slot is empty")]
     SlotEmpty,
-    #[msg("Obligationa not found")]
+    #[msg("Obligation not found")]
     NotFound,
 }

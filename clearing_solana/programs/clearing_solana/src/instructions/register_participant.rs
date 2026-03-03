@@ -1,9 +1,19 @@
-use crate::custom_accounts::{NameRegistry, Participant, ParticipantError, UserType};
+use crate::{
+    custom_accounts::{ClearingState, NameRegistry, Participant, ParticipantError, UserType},
+    errors::CustomErrors,
+};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 #[instruction(name: String)]
 pub struct RegisterParticipant<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
+
     #[account(
         init,
         payer = authority,
@@ -59,6 +69,13 @@ pub fn register_participant(ctx: Context<RegisterParticipant>, name: String) -> 
     participant.last_session_id = 0;
     participant.name_registry = ctx.accounts.name_registry.key();
     participant.bump = ctx.bumps.new_participant;
+
+    //  Update system's state
+    let state = &mut ctx.accounts.state;
+    state.total_participants = state
+        .total_participants
+        .checked_add(1)
+        .ok_or(CustomErrors::MathOverflow)?;
 
     Ok(())
 }

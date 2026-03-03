@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     custom_accounts::{Obligation, ObligationStatus, Participant},
+    errors::CustomErrors,
     events::obligations::ObligationConfirmed,
 };
 
@@ -12,7 +13,7 @@ pub struct ConfirmObligation<'info> {
         mut,
         seeds = [b"participant", from.as_ref()],
         bump,
-        constraint = authority.key() == from @ ConfirmObligationError::Unauthorized,
+        constraint = authority.key() == from @ CustomErrors::Unauthorized,
         constraint = from_participant.authority == from @ ConfirmObligationError::InvalidFromParticipant
     )]
     pub from_participant: Account<'info, Participant>,
@@ -28,8 +29,8 @@ pub struct ConfirmObligation<'info> {
         mut,
         seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
         bump,
-        constraint = obligation.from == from @ ConfirmObligationError::Forbidden,
-        constraint = obligation.to == to @ ConfirmObligationError::Forbidden,
+        constraint = obligation.from == from @ CustomErrors::Forbidden,
+        constraint = obligation.to == to @ CustomErrors::Forbidden,
     )]
     pub obligation: Account<'info, Obligation>,
 
@@ -68,8 +69,6 @@ pub fn confirm_obligation(ctx: Context<ConfirmObligation>) -> Result<()> {
 
 #[error_code]
 pub enum ConfirmObligationError {
-    Unauthorized,
-    Forbidden,
     InvalidStatus,
     InvalidToParticipant,
     InvalidFromParticipant,

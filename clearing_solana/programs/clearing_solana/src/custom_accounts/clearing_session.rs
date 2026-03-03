@@ -7,7 +7,6 @@ pub struct ClearingSession {
     pub status: ClearingSessionStatus,
     pub opened_at: i64,
     pub closed_at: i64,
-    pub participant_count: u32,
     pub total_obligations: u32,
     pub processed_count: u32,
     pub bump: u8,

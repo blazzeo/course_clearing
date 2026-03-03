@@ -1,4 +1,7 @@
-use crate::custom_accounts::{Participant, ParticipantError, UserType};
+use crate::{
+    custom_accounts::{Participant, ParticipantError, UserType},
+    errors::CustomErrors,
+};
 use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
@@ -8,7 +11,7 @@ pub struct UpdateUserType<'info> {
         mut,
         seeds = [b"participant", authority.key().as_ref()],
         bump,
-        constraint = admin.user_type == UserType::Admin @ ParticipantError::Forbidden,
+        constraint = admin.user_type == UserType::Admin @ CustomErrors::Forbidden,
         constraint = admin.authority == authority.key() @ ParticipantError::WrongAuthority
     )]
     pub admin: Account<'info, Participant>,
@@ -28,9 +31,9 @@ pub struct UpdateUserType<'info> {
 /// Method to change user's type
 /// Can only be invoked by admin
 pub fn update_user_type(ctx: Context<UpdateUserType>, user_type: UserType) -> Result<()> {
+    let clock = Clock::get()?;
     let target = &mut ctx.accounts.target_participant;
     let admin = &ctx.accounts.admin;
-    let clock = Clock::get()?;
 
     require!(
         target.key() != admin.key(),

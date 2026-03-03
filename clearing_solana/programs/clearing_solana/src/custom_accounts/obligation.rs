@@ -57,7 +57,4 @@ pub enum ObligationStatus {
 pub enum ObligationError {
     #[msg("From and To cannot be the same")]
     FromToEquals,
-
-    #[msg("Unauthorized")]
-    Unauthorized,
 }

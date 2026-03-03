@@ -4,7 +4,8 @@ use anchor_lang::{
 };
 
 use crate::{
-    custom_accounts::{Escrow, Participant, SessionFee},
+    custom_accounts::{ClearingSession, Escrow, NetPosition, Participant},
+    errors::CustomErrors,
     events::fees::FeePaid,
 };
 
@@ -22,19 +23,24 @@ pub struct PayFee<'info> {
         mut,
         seeds = [b"participant", authority.key().as_ref()],
         bump,
-        constraint = participant.authority == authority.key() @ PayFeeError::Unauthorized
+        constraint = participant.authority == authority.key() @ CustomErrors::Unauthorized
     )]
     pub participant: Account<'info, Participant>,
 
     #[account(
-        mut,
-        seeds = [b"session_fee", authority.key().as_ref() ,&session_id.to_le_bytes()],
-        bump,
-        constraint = session_fee.participant == participant.key() @ PayFeeError::InvalidFeeAccount,
-        constraint = !session_fee.paid @ PayFeeError::AlreadyPaid,
-        constraint = session_fee.session_id == session_id @ PayFeeError::SessionIdMismatch
+        mut, 
+        seeds = [b"session", (session_id).to_le_bytes().as_ref()], 
+        bump
     )]
-    pub session_fee: Account<'info, SessionFee>,
+    pub session: Account<'info, ClearingSession>,
+
+    #[account(
+        mut,
+        seeds = [b"position", session.key().as_ref(), participant.key().as_ref()],
+        bump,
+        constraint = !net_position.fee_paid @ PayFeeError::AlreadyPaid,
+    )]
+    pub net_position: Account<'info, NetPosition>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -48,9 +54,9 @@ pub fn pay_fee(ctx: Context<PayFee>, session_id: u64) -> Result<()> {
 
     let escrow = &mut ctx.accounts.escrow;
     let participant = &mut ctx.accounts.participant;
-    let session_fee = &mut ctx.accounts.session_fee;
+    let net_position = &mut ctx.accounts.net_position;
 
-    require!(session_fee.fee_amount > 0, PayFeeError::InvalidFeeAccount);
+    require!(net_position.fee_amount > 0, PayFeeError::InvalidFeeAccount);
 
     //  Create instruction
     let transfer_instruction = Transfer {
@@ -64,21 +70,21 @@ pub fn pay_fee(ctx: Context<PayFee>, session_id: u64) -> Result<()> {
     );
 
     //  Payment of fee
-    system_program::transfer(cpi_ctx, session_fee.fee_amount)?;
+    system_program::transfer(cpi_ctx, net_position.fee_amount)?;
 
     //  Update state
-    session_fee.paid = true;
+    net_position.fee_paid = true;
     escrow.total_fees = escrow
         .total_fees
-        .checked_add(session_fee.fee_amount)
-        .ok_or(PayFeeError::MathOverflow)?;
+        .checked_add(net_position.fee_amount)
+        .ok_or(CustomErrors::MathOverflow)?;
 
     participant.update_timestamp = clock.unix_timestamp;
 
     emit!(FeePaid {
         participant: ctx.accounts.authority.key(),
         session_id: session_id,
-        amount: session_fee.fee_amount,
+        amount: net_position.fee_amount,
         timestamp: clock.unix_timestamp,
     });
 
@@ -87,11 +93,8 @@ pub fn pay_fee(ctx: Context<PayFee>, session_id: u64) -> Result<()> {
 
 #[error_code]
 pub enum PayFeeError {
-    Unauthorized,
     InvalidFeeAccount,
-    Forbidden,
     SessionIdMismatch,
     InvalidFeeAmount,
     AlreadyPaid,
-    MathOverflow,
 }

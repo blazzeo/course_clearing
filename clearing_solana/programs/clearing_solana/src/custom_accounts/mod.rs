@@ -8,7 +8,6 @@ pub mod obligation;
 pub mod obligation_pool;
 pub mod participant;
 pub mod pool_manager;
-pub mod session_fee;
 pub mod state;
 
 pub use clearing_engine::*;
@@ -21,5 +20,4 @@ pub use obligation::*;
 pub use obligation_pool::*;
 pub use participant::*;
 pub use pool_manager::*;
-pub use session_fee::*;
 pub use state::*;

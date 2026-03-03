@@ -1,10 +1,20 @@
 use anchor_lang::prelude::*;
 
-use crate::custom_accounts::{Obligation, ObligationError, ObligationPool, Participant};
+use crate::{
+    custom_accounts::{ClearingState, Obligation, ObligationError, ObligationPool, Participant},
+    errors::CustomErrors,
+};
 
 #[derive(Accounts)]
-#[instruction(from: Pubkey, to: Pubkey, amount: u64)]
+#[instruction(from: Pubkey, to: Pubkey, amount: u64, pool_id: u32)]
 pub struct RegisterObligation<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
+
     #[account(
         init,
         payer = authority,
@@ -23,10 +33,10 @@ pub struct RegisterObligation<'info> {
 
     #[account(
         mut,
-        seeds = [b"pool", &(0i32).to_le_bytes()],
+        seeds = [b"pool", &(pool_id).to_le_bytes()],
         bump
     )]
-    pub root_pool: Account<'info, ObligationPool>,
+    pub pool: Account<'info, ObligationPool>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -40,6 +50,7 @@ pub fn register_obligation(
     from: Pubkey,
     to: Pubkey,
     amount: u64,
+    pool_id: u32,
 ) -> Result<()> {
     let clock = Clock::get()?;
 
@@ -51,26 +62,21 @@ pub fn register_obligation(
     obligation.to = to;
     obligation.amount = amount;
     obligation.timestamp = clock.unix_timestamp;
-    obligation.session_id = 0;
+    obligation.session_id = None;
     obligation.bump = ctx.bumps.new_obligation;
+    obligation.pool_id = pool_id;
 
-    let root_pool = &mut ctx.accounts.root_pool;
-    let pool = root_pool;
+    //  Try to push obligation to pool
+    //  if failure - retry with next pool_id
+    let pool = &mut ctx.accounts.pool;
+    pool.add_obligation(obligation.key())?;
 
-    // Trying to push obligation till success
-    loop {
-        match pool.add_obligation(obligation.key()) {
-            Ok(pool_id) => {
-                obligation.pool_id = pool_id;
-                break;
-            }
-            Err(err) => {
-                // Get next pool from pool.next_pool
-                // if needed to create that new account
-                pool = pool.next_pool;
-            }
-        }
-    }
+    //  Update system's state
+    let state = &mut ctx.accounts.state;
+    state.total_obligations = state
+        .total_obligations
+        .checked_add(1)
+        .ok_or(CustomErrors::MathOverflow)?;
 
     let participant = &mut ctx.accounts.participant;
     participant.update_timestamp = clock.unix_timestamp;

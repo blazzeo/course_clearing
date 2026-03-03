@@ -46,9 +46,3 @@ pub fn create_pool_manager(ctx: Context<CreatePoolManager>) -> Result<()> {
 
     Ok(())
 }
-
-#[error_code]
-pub enum CreatePoolManagerError {
-    Forbidden,
-    Unauthorized,
-}

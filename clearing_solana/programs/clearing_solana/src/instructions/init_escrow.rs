@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     custom_accounts::{Escrow, Participant, UserType},
+    errors::CustomErrors,
     events::admin::EscrowInitialized,
 };
 
@@ -19,8 +20,8 @@ pub struct InitEscrow<'info> {
     #[account(
         seeds = [b"participant", authority.key().as_ref()],
         bump,
-        constraint = admin.user_type == UserType::Admin @ InitEscrowError::Forbidden,
-        constraint = authority.key() == admin.authority @ InitEscrowError::Unauthorized
+        constraint = admin.user_type == UserType::Admin @ CustomErrors::Forbidden,
+        constraint = authority.key() == admin.authority @ CustomErrors::Unauthorized
     )]
     pub admin: Account<'info, Participant>,
 
@@ -46,12 +47,4 @@ pub fn init_escrow(ctx: Context<InitEscrow>) -> Result<()> {
     });
 
     Ok(())
-}
-
-#[error_code]
-pub enum InitEscrowError {
-    #[msg("Forbidden: admin privileges required")]
-    Forbidden,
-    #[msg("Unauthorized: authority mismatch")]
-    Unauthorized,
 }

@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+@Deprecated
 /// Account for bills of fees to participants
 #[account]
 pub struct SessionFee {

@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::{
     custom_accounts::{Obligation, ObligationStatus, Participant},
+    errors::CustomErrors,
     events::obligations::ObligationDeclined,
 };
 
@@ -12,7 +13,7 @@ pub struct DeclineObligation<'info> {
         mut,
         seeds = [b"participant", from.as_ref()],
         bump,
-        constraint = authority.key() == from @ DeclineObligationError::Unauthorized,
+        constraint = authority.key() == from @ CustomErrors::Unauthorized,
         constraint = from_participant.authority == from @ DeclineObligationError::InvalidFromParticipant
     )]
     pub from_participant: Account<'info, Participant>,
@@ -28,8 +29,8 @@ pub struct DeclineObligation<'info> {
         mut,
         seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
         bump,
-        constraint = obligation.from == from @ DeclineObligationError::Forbidden,
-        constraint = obligation.to == to @ DeclineObligationError::Forbidden,
+        constraint = obligation.from == from @ CustomErrors::Forbidden,
+        constraint = obligation.to == to @ CustomErrors::Forbidden,
     )]
     pub obligation: Account<'info, Obligation>,
 
@@ -68,9 +69,7 @@ pub fn decline_obligation(ctx: Context<DeclineObligation>) -> Result<()> {
 
 #[error_code]
 pub enum DeclineObligationError {
-    Unauthorized,
     InvalidStatus,
-    Forbidden,
     InvalidToParticipant,
     InvalidFromParticipant,
 }
