@@ -12,7 +12,6 @@
 - **PostgreSQL** - база данных для истории и аналитики
 - **Docker Compose** - оркестрация всех сервисов
 - **Nginx** - reverse proxy и статический сервер
-- **Локальная Solana нода** - для тестирования
 
 ## Функциональность
 
@@ -37,82 +36,6 @@
    - Все критические операции выполняются в смарт-контракте Solana
    - Аутентификация через кошельки Solana (Phantom, Solflare)
    - Прозрачность всех операций в блокчейне
-
-## Требования
-
-- Docker и Docker Compose
-- Rust (для локальной разработки)
-- Node.js 20+ (для локальной разработки фронтенда)
-- Anchor CLI (для работы с Solana программой)
-
-## Установка и запуск
-
-### 1. Клонирование репозитория
-
-```bash
-git clone <repository-url>
-cd course
-```
-
-### 2. Запуск через Docker Compose
-
-```bash
-docker-compose up -d
-```
-
-Это запустит все необходимые сервисы:
-- PostgreSQL на порту 5432
-- Solana validator на порту 8899
-- Rust API на порту 8080
-- React фронтенд на порту 3000
-- Nginx на порту 80
-
-### 3. Доступ к сервисам
-
-- **Веб-интерфейс**: http://localhost:80 или http://localhost:3000
-- **API**: http://localhost:8080/api
-- **Solana RPC**: http://localhost:8899
-- **PostgreSQL**: localhost:5432
-
-### 4. Инициализация базы данных
-
-База данных инициализируется автоматически при первом запуске API.
-
-## Разработка
-
-### Локальная разработка API
-
-```bash
-cd api
-cargo run
-```
-
-Убедитесь, что PostgreSQL запущен и доступен по адресу из `DATABASE_URL`.
-
-### Локальная разработка фронтенда
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### Работа с Solana программой
-
-```bash
-cd program
-
-# Установка Anchor (если еще не установлен)
-cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-avm install latest
-avm use latest
-
-# Сборка программы
-anchor build
-
-# Развертывание на локальной ноде
-anchor deploy
-```
 
 ## Структура проекта
 
@@ -144,33 +67,6 @@ course/
 ├── docker-compose.yml
 └── README.md
 ```
-
-## API Endpoints
-
-### Позиции
-
-- `GET /api/positions` - Получить все позиции
-- `GET /api/positions/{id}` - Получить позицию по ID
-- `POST /api/positions` - Создать новую позицию
-- `PUT /api/positions/{id}` - Обновить позицию
-- `DELETE /api/positions/{id}` - Удалить позицию
-- `POST /api/positions/{id}/confirm` - Подтвердить позицию
-- `POST /api/positions/{id}/clear` - Выполнить клиринг
-
-### Участники
-
-- `GET /api/participants` - Получить всех участников
-- `GET /api/participants/{address}` - Получить участника по адресу
-- `GET /api/participants/{address}/balance` - Получить баланс участника
-
-### Клиринг
-
-- `POST /api/clearing/multi-party` - Создать многосторонний клиринг
-
-### Залоги
-
-- `POST /api/margin/deposit` - Внести залог
-- `POST /api/margin/withdraw` - Вывести залог
 
 ## Использование
 
@@ -204,24 +100,3 @@ course/
 - **Wallet**: @solana/wallet-adapter
 - **Containerization**: Docker + Docker Compose
 - **Web Server**: Nginx
-
-## Примечания
-
-- Проект использует локальную тестовую ноду Solana для разработки
-- Все транзакции выполняются в тестовой сети
-- Для продакшена необходимо настроить подключение к основной сети Solana
-- Валидация подписей транзакций должна быть реализована для полной безопасности
-
-## Лицензия
-
-Этот проект создан в образовательных целях для курсовой работы.
-
-## Автор
-
-Создано для курсовой работы по теме "Клиринговый сервис на блокчейне"
-
-
-
-
-
-
