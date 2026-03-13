@@ -12,7 +12,7 @@ clearing_solana = "DtFHUe9366drd6czf5hocSrWswr2DRT9YQhrbfQRmt15"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
