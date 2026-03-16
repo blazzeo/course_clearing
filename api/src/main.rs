@@ -9,7 +9,7 @@ use actix_web::{web, App, HttpServer};
 use dotenv::dotenv;
 use std::{env, sync::Arc};
 
-fn parse_env() -> (String, u16, String, String) {
+fn parse_env() -> (String, u16, String) {
     let solana_rpc_url = env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL env missing");
 
     let port = env::var("PORT")
@@ -17,11 +17,9 @@ fn parse_env() -> (String, u16, String, String) {
         .parse::<u16>()
         .expect("PORT must be a valid number");
 
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL env missing");
-
     let admin_pubkey = env::var("ADMIN_PUBKEY").expect("ADMIN_PUBKEY env missing");
 
-    (solana_rpc_url, port, database_url, admin_pubkey)
+    (solana_rpc_url, port, admin_pubkey)
 }
 
 #[actix_web::main]
@@ -29,7 +27,7 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    let (solana_rpc_url, port, database_url, admin_pubkey) = parse_env();
+    let (solana_rpc_url, port, admin_pubkey) = parse_env();
 
     let blockchain_client = blockchain::BlockchainClient::new(&solana_rpc_url)
         .expect("Failed to create blockchain client");
@@ -50,6 +48,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(web::Data::new(solana_rpc_url.clone()))
             .app_data(web::Data::new(blockchain_client_data.clone()))
+            .app_data(web::Data::new(admin_pubkey.clone()))
             .route("/health", web::get().to(handlers::health))
             .service(web::scope("/api").route(
                 "/clearing/run",

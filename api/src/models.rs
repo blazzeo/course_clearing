@@ -1,26 +1,16 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-
-#[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
-pub struct Position {
-    pub id: i32,
-    pub creator_address: String,
-    pub counterparty_address: String,
-    pub amount: i64,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub confirmed_at: Option<DateTime<Utc>>,
-    pub cleared_at: Option<DateTime<Utc>>,
-    pub creator_signature: Option<String>,
-    pub counterparty_signature: Option<String>,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromRow, PartialEq)]
 pub struct RawSettlement {
     pub from_address: String,
     pub to_address: String,
     pub amount: i64,
+}
+#[derive(Deserialize)]
+pub struct AdminSignedRequest {
+    pub message: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
