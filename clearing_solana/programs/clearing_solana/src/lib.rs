@@ -265,8 +265,6 @@ pub mod clearing_solana {
         let participant = &mut ctx.accounts.new_participant;
         participant.authority = ctx.accounts.authority.key();
         participant.user_type = UserType::Participant;
-        participant.set_name(&name)?;
-        participant.user_name_len = name.len() as u8;
         participant.registration_timestamp = clock.unix_timestamp;
         participant.update_timestamp = clock.unix_timestamp;
         participant.last_session_id = 0;
@@ -607,14 +605,11 @@ pub enum PayFeeError {
 #[account]
 pub struct ClearingEngine {
     pub authority: Pubkey,
-    // pub state: Pubkey, // ClearingState
     pub bump: u8,
 }
 
 impl ClearingEngine {
-    pub const LEN: usize = 8 + // descriminator
-        32 + // authority
-             // 32 + // ClearingState
+    pub const LEN: usize = 32 + // authority
         1; // bump
 
     pub fn pda() -> (Pubkey, u8) {
@@ -641,7 +636,13 @@ pub struct ClearingSession {
 }
 
 impl ClearingSession {
-    pub const LEN: usize = std::mem::size_of::<Self>();
+    pub const LEN: usize = 8 +  // id
+        1 +  // status
+        8 +  // opened_at
+        8 +  // closed_at
+        4 +  // total_obligations
+        4 +  // processed_count
+        1; // bump
 
     pub fn pda(session_id: u64) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"session", &session_id.to_le_bytes()], &crate::ID)
@@ -675,8 +676,7 @@ pub struct Escrow {
 }
 
 impl Escrow {
-    pub const LEN: usize = 8 + // descriminator
-        32 + // authority
+    pub const LEN: usize = 32 + // authority
         8 + // total_fess
         1; // bump
 
@@ -695,13 +695,21 @@ pub struct NameRegistry {
 }
 
 impl NameRegistry {
-    pub const LEN: usize = 8 + // delimiter
-        32 + // name_bytes
+    pub const LEN: usize = 32 + // name_bytes
         32 + // participant
         1; // bump
 
-    pub fn pda_by_name(name: &str) -> (Pubkey, u8) {
-        Pubkey::find_program_address(&[b"name_registry", name.as_bytes()], &crate::ID)
+    pub fn pda_by_name(name_hash: &[u8; 32]) -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[b"name_registry", name_hash.as_ref()], &crate::ID)
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        let bytes = name.as_bytes();
+
+        self.name_bytes = [0u8; 32]; // cleanup
+
+        let len = bytes.len().min(32);
+        self.name_bytes[..len].copy_from_slice(&bytes[..len]);
     }
 }
 
@@ -716,7 +724,12 @@ pub struct NetPosition {
 }
 
 impl NetPosition {
-    pub const LEN: usize = std::mem::size_of::<Self>();
+    pub const LEN: usize = 8 + // session_id
+        32 + // participant
+        8 + // net_amount
+        8 + // fee_amount
+        1 + // fee_paid
+        1; // bump
 }
 
 use anchor_lang::prelude::clock::UnixTimestamp;
@@ -741,7 +754,16 @@ pub struct Obligation {
 }
 
 impl Obligation {
-    pub const LEN: usize = std::mem::size_of::<Self>();
+    pub const LEN: usize = 1 +  // status
+        32 + // from
+        32 + // to
+        8 + // amount
+        8 + // timestamp
+        16 + // session_id
+        1 + // from_cancel
+        1 + // to_cancel
+        4 + // pool_id
+        1; // bump
 
     // TODO: OR linked-list to connect from-to-session_id obligations OR from-to-timestamp
     pub fn pda(from: Pubkey, to: Pubkey, timestamp: UnixTimestamp) -> (Pubkey, u8) {
@@ -796,8 +818,7 @@ pub struct ObligationPool {
 
 impl ObligationPool {
     pub const MAX_OBLIGATIONS: usize = 100;
-    pub const LEN: usize = 8 + // discriminator
-        32 + // authority
+    pub const LEN: usize = 32 + // authority
         4 + // pool_id
         32 * Self::MAX_OBLIGATIONS + // obligations array
         Self::MAX_OBLIGATIONS + // occupied array
@@ -882,8 +903,6 @@ pub enum PoolError {
 pub struct Participant {
     pub authority: Pubkey,
     pub user_type: UserType,
-    pub user_name: [u8; 32],
-    pub user_name_len: u8,
     pub registration_timestamp: i64,
     pub update_timestamp: i64,
     pub last_session_id: u64,
@@ -894,8 +913,7 @@ pub struct Participant {
 impl Participant {
     pub const MAX_NAME_LEN: usize = 32;
 
-    pub const LEN: usize = 8 + // descriminator
-        32 + // authority
+    pub const LEN: usize = 32 + // authority
         1 + // user_type
         8 + // registration_timestamp
         8 + // update_timestamp
@@ -905,28 +923,6 @@ impl Participant {
 
     pub fn pda(pubkey: Pubkey) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"participant", pubkey.as_ref()], &crate::ID)
-    }
-
-    pub fn set_name(&mut self, name: &str) -> Result<()> {
-        let name_bytes = name.as_bytes();
-        require!(
-            name_bytes.len() <= Self::MAX_NAME_LEN,
-            ParticipantError::NameTooLong
-        );
-
-        self.user_name_len = name_bytes.len() as u8;
-        self.user_name[..name_bytes.len()].copy_from_slice(name_bytes);
-
-        // Null remaining bytes
-        if name_bytes.len() < Self::MAX_NAME_LEN {
-            self.user_name[name_bytes.len()..].fill(0);
-        }
-        Ok(())
-    }
-
-    pub fn get_name(&self) -> &str {
-        std::str::from_utf8(&self.user_name[..self.user_name_len as usize])
-            .unwrap_or("invalid_utf8")
     }
 }
 
@@ -962,8 +958,7 @@ pub struct PoolManager {
 }
 
 impl PoolManager {
-    pub const LEN: usize = 8 + // descriminator
-        32 + // authority
+    pub const LEN: usize = 32 + // authority
         32 + // root_pool
         1; // bump
 }
@@ -981,7 +976,13 @@ pub struct ClearingState {
 }
 
 impl ClearingState {
-    pub const LEN: usize = std::mem::size_of::<Self>();
+    pub const LEN: usize = 32 + // authority
+        8 + // total_sessions
+        8 + // total_participants
+        8 + // total_obligations
+        8 + // fee_rate_bps
+        8 + // update_timestamp
+        1; // bump
 
     pub fn pda() -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"state"], &crate::ID)
@@ -999,6 +1000,7 @@ impl ClearingState {
 #[derive(Accounts)]
 pub struct UpdateFeeRate<'info> {
     #[account(
+        mut,
         seeds = [b"participant", authority.key().as_ref()],
         bump,
         constraint = admin.user_type == UserType::Admin @ UpdateFeeRateError::Forbidden,
@@ -1108,12 +1110,12 @@ pub struct ConfirmObligation<'info> {
     pub to_participant: Account<'info, Participant>,
 
     #[account(
-                mut,
-                seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
-                bump,
-                constraint = obligation.from == from @ CustomErrors::Forbidden,
-                constraint = obligation.to == to @ CustomErrors::Forbidden,
-            )]
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
+        bump,
+        constraint = obligation.from == from @ CustomErrors::Forbidden,
+        constraint = obligation.to == to @ CustomErrors::Forbidden,
+    )]
     pub obligation: Account<'info, Obligation>,
 
     pub authority: Signer<'info>,
@@ -1141,7 +1143,7 @@ pub struct RegisterObligation<'info> {
     #[account(
             init,
             payer = authority,
-            space = Obligation::LEN,
+            space = 8 + Obligation::LEN,
             seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
             bump
         )]
@@ -1195,6 +1197,7 @@ pub struct DeclineObligation<'info> {
             )]
     pub obligation: Account<'info, Obligation>,
 
+    #[account(mut)]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -1239,21 +1242,21 @@ pub struct ProcessObligation<'info> {
     pub pool: Account<'info, ObligationPool>,
 
     #[account(
-                        init_if_needed,
-                        payer = payer,
-                        space = NetPosition::LEN,
-                        seeds = [b"position", session.key().as_ref(), obligation.from.as_ref()], 
-                        bump
-                    )]
+        init_if_needed,
+        payer = payer,
+        space = 8 + NetPosition::LEN,
+        seeds = [b"position", session.key().as_ref(), obligation.from.as_ref()], 
+        bump
+    )]
     pub from_position: Account<'info, NetPosition>,
 
     #[account(
-                            init_if_needed,
-                            payer = payer,
-                            space = NetPosition::LEN,
-                            seeds = [b"position", session.key().as_ref(), obligation.to.as_ref()], 
-                            bump
-                        )]
+        init_if_needed,
+        payer = payer,
+        space = 8 + NetPosition::LEN,
+        seeds = [b"position", session.key().as_ref(), obligation.to.as_ref()], 
+        bump
+    )]
     pub to_position: Account<'info, NetPosition>,
 
     #[account(mut)]
@@ -1280,7 +1283,7 @@ pub struct FinalizeClearingSession<'info> {
     #[account(
             init,
             payer = authority,
-            space = ClearingSession::LEN,
+            space = 8 + ClearingSession::LEN,
             seeds = [b"session", state.total_sessions.to_le_bytes().as_ref()],
             bump
         )]
@@ -1303,7 +1306,7 @@ pub struct StartClearingSession<'info> {
     #[account(
             init,
             payer = authority,
-            space = ClearingSession::LEN,
+            space = 8 + ClearingSession::LEN,
             seeds = [b"session", (state.total_sessions + 1).to_le_bytes().as_ref()],
             bump
         )]
@@ -1327,7 +1330,7 @@ pub struct CreateNewPool<'info> {
     #[account(
             init,
             payer = authority,
-            space = ObligationPool::LEN,
+            space = 8 + ObligationPool::LEN,
             seeds = [b"pool", &(last_pool.id+1).to_le_bytes()],
             bump
         )]
@@ -1349,7 +1352,7 @@ pub struct CreatePoolManager<'info> {
     #[account(
         init,
         payer = authority,
-        space = ObligationPool::LEN,
+        space = 8 + ObligationPool::LEN,
         seeds = [b"pool", &(0u32).to_le_bytes()],
         bump
     )]
@@ -1358,7 +1361,7 @@ pub struct CreatePoolManager<'info> {
     #[account(
             init,
             payer = authority,
-            space = PoolManager::LEN,
+            space = 8 + PoolManager::LEN,
             seeds = [b"pool_manager"],
             bump
         )]
@@ -1374,7 +1377,7 @@ pub struct InitEscrow<'info> {
     #[account(
         init,
         payer = authority,
-        space = Escrow::LEN,
+        space = 8 + Escrow::LEN,
         seeds = [b"escrow"],
         bump
     )]
@@ -1394,7 +1397,7 @@ pub struct InitEscrow<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(name: String)]
+#[instruction(name_hash: [u8; 32])]
 pub struct RegisterParticipant<'info> {
     #[account(
         mut,
@@ -1406,19 +1409,19 @@ pub struct RegisterParticipant<'info> {
     #[account(
             init,
             payer = authority,
-            space = Participant::LEN,
+            space = 8 + Participant::LEN,
             seeds = [b"participant", authority.key().as_ref()],
             bump
         )]
     pub new_participant: Account<'info, Participant>,
 
     #[account(
-                init,
-                payer = authority,
-                space = NameRegistry::LEN,
-                seeds = [b"name_registry", name.as_bytes()],
-                bump
-            )]
+        init,
+        payer = authority,
+        space = 8 + NameRegistry::LEN,
+        seeds = [b"name_registry", name_hash.as_ref()],
+        bump
+    )]
     pub name_registry: Account<'info, NameRegistry>,
 
     #[account(mut)]
@@ -1438,19 +1441,19 @@ pub struct SettlePosition<'info> {
     pub session: Account<'info, ClearingSession>,
 
     #[account(
-            mut,
-            seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
-            bump,
-            constraint = net_position.fee_paid @ SettlePositionError::FeeNotPaid,
-            constraint = net_position.net_amount > 0 @ SettlePositionError::NoNeedInPayment
-        )]
+        mut,
+        seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
+        bump,
+        constraint = net_position.fee_paid @ SettlePositionError::FeeNotPaid,
+        constraint = net_position.net_amount > 0 @ SettlePositionError::NoNeedInPayment
+    )]
     pub net_position: Account<'info, NetPosition>,
 
     #[account(
-                mut,
-                seeds = [b"obligation", authority.key().as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
-                bump
-            )]
+        mut,
+        seeds = [b"obligation", authority.key().as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
+        bump
+    )]
     pub obligation: Account<'info, Obligation>,
 
     #[account(mut)]
@@ -1518,10 +1521,10 @@ pub struct UpdateUserType<'info> {
     pub admin: Account<'info, Participant>,
 
     #[account(
-            mut,
-            seeds = [b"participant", participant.as_ref()],
-            bump
-        )]
+        mut,
+        seeds = [b"participant", participant.as_ref()],
+        bump
+    )]
     pub target_participant: Account<'info, Participant>,
 
     #[account(mut)]

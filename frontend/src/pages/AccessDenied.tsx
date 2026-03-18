@@ -74,13 +74,6 @@ export default function AccessDenied({ requiredRole, resource }: AccessDeniedPro
 					<Link to="/profile" className="btn success">Профиль</Link>
 				</div>
 
-				<div className="dev-info">
-					<strong>Для разработчиков</strong>
-					<div>Ресурс: {resource || 'неизвестен'}</div>
-					<div>Требуемая роль: {requiredRole || 'не указана'}</div>
-					<div>Кошелёк: {publicKey ? 'подключён' : 'не подключён'}</div>
-				</div>
-
 			</div>
 		</div>
 	)
