@@ -64,6 +64,9 @@ pub mod clearing_solana {
         let from_participant = &mut ctx.accounts.from_participant;
         from_participant.update_timestamp = clock.unix_timestamp;
 
+        let pool = &mut ctx.accounts.pool;
+        pool.remove_obligation(obligation.key())?;
+
         // Event
         emit!(ObligationDeclined {
             obligation: obligation.key(),
@@ -184,11 +187,9 @@ pub mod clearing_solana {
         let new_pool = &mut ctx.accounts.new_pool;
         new_pool.authority = last_pool.authority;
         new_pool.id = last_pool_id + 1;
-        new_pool.obligations = [Pubkey::default(); 100];
-        new_pool.occupied = [false; 100];
+        new_pool.obligations = [Pubkey::default(); ObligationPool::MAX_OBLIGATIONS];
         new_pool.occupied_count = 0;
         new_pool.next_pool = None;
-        new_pool.prev_pool = Some(last_pool.key());
         new_pool.bump = ctx.bumps.new_pool;
 
         //  Link new pool with last
@@ -207,11 +208,9 @@ pub mod clearing_solana {
         let root_pool = &mut ctx.accounts.root_pool;
         root_pool.id = 0;
         root_pool.authority = ctx.accounts.authority.key();
-        root_pool.obligations = [Pubkey::default(); 100];
-        root_pool.occupied = [false; 100];
+        root_pool.obligations = [Pubkey::default(); ObligationPool::MAX_OBLIGATIONS];
         root_pool.occupied_count = 0;
         root_pool.next_pool = None;
-        root_pool.prev_pool = None;
         root_pool.bump = ctx.bumps.root_pool;
 
         let pool_manager = &mut ctx.accounts.pool_manager;
@@ -539,6 +538,11 @@ pub mod clearing_solana {
         if obligation.to_cancel && obligation.from_cancel {
             obligation.status = ObligationStatus::Cancelled;
 
+            //  Remove obligation from pool
+            let pool = &mut ctx.accounts.pool;
+
+            pool.remove_obligation(obligation.key())?;
+
             // Event
             emit!(ObligationCancelled {
                 obligation: obligation.key(),
@@ -808,30 +812,25 @@ pub enum ObligationError {
 pub struct ObligationPool {
     pub authority: Pubkey,
     pub id: u32,
-    pub obligations: [Pubkey; 100],
-    pub occupied: [bool; 100],
+    pub obligations: [Pubkey; Self::MAX_OBLIGATIONS],
     pub occupied_count: u8,
     pub next_pool: Option<Pubkey>,
-    pub prev_pool: Option<Pubkey>,
     pub bump: u8,
 }
 
 impl ObligationPool {
-    pub const MAX_OBLIGATIONS: usize = 100;
+    pub const MAX_OBLIGATIONS: usize = 50;
     pub const LEN: usize = 32 + // authority
         4 + // pool_id
         32 * Self::MAX_OBLIGATIONS + // obligations array
-        Self::MAX_OBLIGATIONS + // occupied array
         1 + // occupied_count
         33 + // next_pool (Option<Pubkey>)
-        33 + // prev_pool (Option<Pubkey>)
         1; // bump
 
     /// Returns id of Pool
     pub fn add_obligation(&mut self, obligation_pubkey: Pubkey) -> Result<()> {
         for i in 0..Self::MAX_OBLIGATIONS {
-            if !self.occupied[i] {
-                self.occupied[i] = true;
+            if self.obligations[i] == Pubkey::default() {
                 self.obligations[i] = obligation_pubkey;
                 self.occupied_count
                     .checked_add(1)
@@ -846,13 +845,12 @@ impl ObligationPool {
 
     pub fn remove_obligation_nth(&mut self, index: usize) -> Result<()> {
         require!(index < Self::MAX_OBLIGATIONS, PoolError::InvalidIndex);
-        require!(self.occupied[index], PoolError::SlotEmpty);
         require!(
-            self.obligations[index] == Pubkey::default(),
+            self.obligations[index] != Pubkey::default(),
             PoolError::SlotEmpty
         );
 
-        self.occupied[index] = false;
+        // self.occupied[index] = false;
         self.obligations[index] = Pubkey::default();
         self.occupied_count
             .checked_sub(1)
@@ -864,7 +862,6 @@ impl ObligationPool {
     pub fn remove_obligation(&mut self, obligation: Pubkey) -> Result<()> {
         for i in 0..Self::MAX_OBLIGATIONS {
             if self.obligations[i] == obligation {
-                self.occupied[i] = false;
                 self.obligations[i] = Pubkey::default();
                 self.occupied_count
                     .checked_sub(1)
@@ -1057,23 +1054,30 @@ pub struct CancelObligation<'info> {
         bump,
         constraint = from_participant.authority == from @ CancelObligationError::InvalidFromParticipant
     )]
-    pub from_participant: Account<'info, Participant>,
+    pub from_participant: Box<Account<'info, Participant>>,
 
     #[account(
-            seeds = [b"participant", to.as_ref()],
-            bump,
-            constraint = to_participant.authority == to @ CancelObligationError::InvalidToParticipant
-        )]
-    pub to_participant: Account<'info, Participant>,
+        seeds = [b"participant", to.as_ref()],
+        bump,
+        constraint = to_participant.authority == to @ CancelObligationError::InvalidToParticipant
+    )]
+    pub to_participant: Box<Account<'info, Participant>>,
 
     #[account(
-                mut,
-                seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
-                bump,
-                constraint = obligation.from == from @ CancelObligationError::Forbidden,
-                constraint = obligation.to == to @ CancelObligationError::Forbidden,
-            )]
-    pub obligation: Account<'info, Obligation>,
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
+        bump,
+        constraint = obligation.from == from @ CancelObligationError::Forbidden,
+        constraint = obligation.to == to @ CancelObligationError::Forbidden,
+    )]
+    pub obligation: Box<Account<'info, Obligation>>,
+
+    #[account(
+        mut,
+        seeds = [b"pool", &obligation.pool_id.to_le_bytes()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
 
     pub authority: Signer<'info>,
 
@@ -1138,30 +1142,30 @@ pub struct RegisterObligation<'info> {
         seeds = [b"state"],
         bump
     )]
-    pub state: Account<'info, ClearingState>,
+    pub state: Box<Account<'info, ClearingState>>,
 
     #[account(
-            init,
-            payer = authority,
-            space = 8 + Obligation::LEN,
-            seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
-            bump
-        )]
-    pub new_obligation: Account<'info, Obligation>,
+        init,
+        payer = authority,
+        space = 8 + Obligation::LEN,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
+        bump
+    )]
+    pub new_obligation: Box<Account<'info, Obligation>>,
 
     #[account(
-            mut,
-            seeds = [b"participant", authority.key().as_ref()],
-            bump
-        )]
-    pub participant: Account<'info, Participant>,
+        mut,
+        seeds = [b"participant", authority.key().as_ref()],
+        bump
+    )]
+    pub participant: Box<Account<'info, Participant>>,
 
     #[account(
-            mut,
-            seeds = [b"pool", &pool_id.to_le_bytes()],
-            bump
-        )]
-    pub pool: Account<'info, ObligationPool>,
+        mut,
+        seeds = [b"pool", &pool_id.to_le_bytes()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -1179,23 +1183,30 @@ pub struct DeclineObligation<'info> {
         constraint = authority.key() == from @ CustomErrors::Unauthorized,
         constraint = from_participant.authority == from @ DeclineObligationError::InvalidFromParticipant
     )]
-    pub from_participant: Account<'info, Participant>,
+    pub from_participant: Box<Account<'info, Participant>>,
 
     #[account(
-            seeds = [b"participant", to.as_ref()],
-            bump,
-            constraint = to_participant.authority == to @ DeclineObligationError::InvalidToParticipant
-        )]
-    pub to_participant: Account<'info, Participant>,
+        seeds = [b"participant", to.as_ref()],
+        bump,
+        constraint = to_participant.authority == to @ DeclineObligationError::InvalidToParticipant
+    )]
+    pub to_participant: Box<Account<'info, Participant>>,
 
     #[account(
-                mut,
-                seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
-                bump,
-                constraint = obligation.from == from @ CustomErrors::Forbidden,
-                constraint = obligation.to == to @ CustomErrors::Forbidden,
-            )]
-    pub obligation: Account<'info, Obligation>,
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), &timestamp.to_le_bytes()],
+        bump,
+        constraint = obligation.from == from @ CustomErrors::Forbidden,
+        constraint = obligation.to == to @ CustomErrors::Forbidden,
+    )]
+    pub obligation: Box<Account<'info, Obligation>>,
+
+    #[account(
+        mut,
+        seeds = [b"pool", &obligation.pool_id.to_le_bytes()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -1218,28 +1229,28 @@ pub struct ProcessObligation<'info> {
         seeds = [b"state"],
         bump
     )]
-    pub state: Account<'info, ClearingState>,
+    pub state: Box<Account<'info, ClearingState>>,
 
     #[account(
-            mut,
-            seeds = [b"session", &state.total_sessions.to_le_bytes()], 
-            bump = session.bump
-        )]
-    pub session: Account<'info, ClearingSession>,
+        mut,
+        seeds = [b"session", &state.total_sessions.to_le_bytes()], 
+        bump = session.bump
+    )]
+    pub session: Box<Account<'info, ClearingSession>>,
 
     #[account(
-                mut,
-                seeds = [b"obligation", from.as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
-                bump
-            )]
-    pub obligation: Account<'info, Obligation>,
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub obligation: Box<Account<'info, Obligation>>,
 
     #[account(
-                    mut,
-                    seeds = [b"pool", obligation.pool_id.to_le_bytes().as_ref()],
-                    bump
-                )]
-    pub pool: Account<'info, ObligationPool>,
+        mut,
+        seeds = [b"pool", obligation.pool_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
 
     #[account(
         init_if_needed,
@@ -1248,7 +1259,7 @@ pub struct ProcessObligation<'info> {
         seeds = [b"position", session.key().as_ref(), obligation.from.as_ref()], 
         bump
     )]
-    pub from_position: Account<'info, NetPosition>,
+    pub from_position: Box<Account<'info, NetPosition>>,
 
     #[account(
         init_if_needed,
@@ -1257,10 +1268,11 @@ pub struct ProcessObligation<'info> {
         seeds = [b"position", session.key().as_ref(), obligation.to.as_ref()], 
         bump
     )]
-    pub to_position: Account<'info, NetPosition>,
+    pub to_position: Box<Account<'info, NetPosition>>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -1325,16 +1337,16 @@ pub struct CreateNewPool<'info> {
         bump,
         constraint = last_pool.next_pool.is_none() @  CreateNewPoolError::PoolNotLast
     )]
-    pub last_pool: Account<'info, ObligationPool>,
+    pub last_pool: Box<Account<'info, ObligationPool>>,
 
     #[account(
-            init,
-            payer = authority,
-            space = 8 + ObligationPool::LEN,
-            seeds = [b"pool", &(last_pool.id+1).to_le_bytes()],
-            bump
-        )]
-    pub new_pool: Account<'info, ObligationPool>,
+        init,
+        payer = authority,
+        space = 8 + ObligationPool::LEN,
+        seeds = [b"pool", &(last_pool.id+1).to_le_bytes()],
+        bump
+    )]
+    pub new_pool: Box<Account<'info, ObligationPool>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -1356,7 +1368,7 @@ pub struct CreatePoolManager<'info> {
         seeds = [b"pool", &(0u32).to_le_bytes()],
         bump
     )]
-    pub root_pool: Account<'info, ObligationPool>,
+    pub root_pool: Box<Account<'info, ObligationPool>>,
 
     #[account(
             init,
