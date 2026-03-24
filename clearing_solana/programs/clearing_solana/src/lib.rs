@@ -1,12 +1,28 @@
 use anchor_lang::prelude::*;
 
-declare_id!("DtFHUe9366drd6czf5hocSrWswr2DRT9YQhrbfQRmt15");
+declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
 
 #[program]
 pub mod clearing_solana {
     use anchor_lang::system_program::{self, Transfer};
 
     use super::*;
+
+    pub fn init_clearing_state(ctx: Context<InitClearingState>) -> Result<()> {
+        let clock = Clock::get()?;
+
+        let state = &mut ctx.accounts.state;
+
+        state.authority = ctx.accounts.authority.key();
+        state.bump = ctx.bumps.state;
+        state.total_participants = 0;
+        state.total_sessions = 0;
+        state.total_obligations = 0;
+        state.fee_rate_bps = 0;
+        state.update_timestamp = clock.unix_timestamp;
+
+        Ok(())
+    }
 
     /// Method to create new obligation(from-to-amount)
     pub fn register_obligation(
@@ -15,6 +31,7 @@ pub mod clearing_solana {
         to: Pubkey,
         amount: u64,
         pool_id: u32,
+        timestamp: i64,
     ) -> Result<()> {
         let clock = Clock::get()?;
 
@@ -49,7 +66,12 @@ pub mod clearing_solana {
     }
 
     /// Method to decline obligation if 'from participant' disagree with conditions
-    pub fn decline_obligation(ctx: Context<DeclineObligation>) -> Result<()> {
+    pub fn decline_obligation(
+        ctx: Context<DeclineObligation>,
+        from: Pubkey,
+        to: Pubkey,
+        timestamp: i64,
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
         let obligation = &mut ctx.accounts.obligation;
@@ -79,7 +101,12 @@ pub mod clearing_solana {
         Ok(())
     }
 
-    pub fn process_obligation(ctx: Context<ProcessObligation>) -> Result<()> {
+    pub fn process_obligation(
+        ctx: Context<ProcessObligation>,
+        from: Pubkey,
+        to: Pubkey,
+        timestamp: i64,
+    ) -> Result<()> {
         let session = &mut ctx.accounts.session;
         let state = &ctx.accounts.state;
         let session_id = session.id;
@@ -112,7 +139,7 @@ pub mod clearing_solana {
         let from_pos = &mut ctx.accounts.from_position;
         from_pos.net_amount = from_pos
             .net_amount
-            .checked_sub(obligation.amount as i64)
+            .checked_sub(obligation.amount)
             .ok_or(CustomErrors::MathOverflow)?;
 
         //  Calculate new add fee and update total fee
@@ -126,7 +153,7 @@ pub mod clearing_solana {
         let to_pos = &mut ctx.accounts.to_position;
         to_pos.net_amount = to_pos
             .net_amount
-            .checked_add(obligation.amount as i64)
+            .checked_add(obligation.amount)
             .ok_or(CustomErrors::MathOverflow)?;
 
         session.processed_count = session
@@ -241,26 +268,19 @@ pub mod clearing_solana {
     }
 
     /// Method to register new participant
-    pub fn register_participant(ctx: Context<RegisterParticipant>, name: String) -> Result<()> {
+    pub fn register_participant(
+        ctx: Context<RegisterParticipant>,
+        name_hash: [u8; 32],
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
-        //  Check Name length
-        require!(
-            name.len() <= Participant::MAX_NAME_LEN,
-            ParticipantError::NameTooLong
-        );
-
-        //  Save name in Registry
+        // Save name hash in Registry
         let registry = &mut ctx.accounts.name_registry;
-        let mut name_bytes: [u8; 32] = [0; 32];
-        let len = name.len().min(32);
-        name_bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
-
-        registry.name_bytes = name_bytes;
+        registry.name_bytes = name_hash;
         registry.participant = ctx.accounts.authority.key();
         registry.bump = ctx.bumps.name_registry;
 
-        //  Save participant himself
+        // Save participant
         let participant = &mut ctx.accounts.new_participant;
         participant.authority = ctx.accounts.authority.key();
         participant.user_type = UserType::Participant;
@@ -270,17 +290,24 @@ pub mod clearing_solana {
         participant.name_registry = ctx.accounts.name_registry.key();
         participant.bump = ctx.bumps.new_participant;
 
-        //  Update system's state
+        // Update system state
         let state = &mut ctx.accounts.state;
         state.total_participants = state
             .total_participants
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
 
+        msg!("Participant PDA: {}", participant.key());
+
         Ok(())
     }
 
-    pub fn settle_position(ctx: Context<SettlePosition>) -> Result<()> {
+    pub fn settle_position(
+        ctx: Context<SettlePosition>,
+        session_id: u64,
+        to: Pubkey,
+        timestamp: i64,
+    ) -> Result<()> {
         let net_position = &mut ctx.accounts.net_position;
         let obligation = &mut ctx.accounts.obligation;
 
@@ -306,7 +333,7 @@ pub mod clearing_solana {
         //  Update net position amount
         net_position.net_amount = net_position
             .net_amount
-            .checked_sub(obligation.amount as i64)
+            .checked_sub(obligation.amount)
             .ok_or(CustomErrors::MathOverflow)?;
 
         obligation.status = ObligationStatus::Netted;
@@ -315,7 +342,12 @@ pub mod clearing_solana {
     }
 
     /// Method to get configrmation by 'from participant' (the one that will have to pay obligation).
-    pub fn confirm_obligation(ctx: Context<ConfirmObligation>) -> Result<()> {
+    pub fn confirm_obligation(
+        ctx: Context<ConfirmObligation>,
+        from: Pubkey,
+        to: Pubkey,
+        timestamp: i64,
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
         let obligation = &mut ctx.accounts.obligation;
@@ -395,6 +427,7 @@ pub mod clearing_solana {
 
     pub fn update_participant_last_session_id(
         ctx: Context<UpdateParticipantLastSessionId>,
+        participant: Pubkey,
     ) -> Result<()> {
         let state = &ctx.accounts.state;
 
@@ -412,7 +445,11 @@ pub mod clearing_solana {
 
     /// Method to change user's type
     /// Can only be invoked by admin
-    pub fn update_user_type(ctx: Context<UpdateUserType>, user_type: UserType) -> Result<()> {
+    pub fn update_user_type(
+        ctx: Context<UpdateUserType>,
+        participant: Pubkey,
+        user_type: UserType,
+    ) -> Result<()> {
         let clock = Clock::get()?;
         let target = &mut ctx.accounts.target_participant;
         let admin = &ctx.accounts.admin;
@@ -501,7 +538,12 @@ pub mod clearing_solana {
     /// Method must be called by both participants of obligation.
     /// Each will interact only with his 'cancel flag'.
     /// When both flags are true - only then obligation is considered as 'Canceled'.
-    pub fn cancel_obligation(ctx: Context<CancelObligation>) -> Result<()> {
+    pub fn cancel_obligation(
+        ctx: Context<CancelObligation>,
+        from: Pubkey,
+        to: Pubkey,
+        timestamp: i64,
+    ) -> Result<()> {
         // Get time for timestamp
         let clock = Clock::get()?;
 
@@ -717,11 +759,13 @@ impl NameRegistry {
     }
 }
 
+//  TODO: Add status + fix if creditor has muiltiple debitors
 #[account]
 pub struct NetPosition {
     pub session_id: u64,
-    pub participant: Pubkey,
-    pub net_amount: i64,
+    pub creditor: Pubkey,
+    pub debitor: Pubkey,
+    pub net_amount: u64,
     pub fee_amount: u64,
     pub fee_paid: bool,
     pub bump: u8,
@@ -729,7 +773,8 @@ pub struct NetPosition {
 
 impl NetPosition {
     pub const LEN: usize = 8 + // session_id
-        32 + // participant
+        32 + // creditor
+        32 + // debitor
         8 + // net_amount
         8 + // fee_amount
         1 + // fee_paid
@@ -1038,6 +1083,23 @@ pub struct WithdrawFee<'info> {
         constraint = escrow.authority == authority.key() @ WithdrawFeeError::Forbidden
     )]
     pub escrow: Account<'info, Escrow>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitClearingState<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + ClearingState::LEN,
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
 
     #[account(mut)]
     pub authority: Signer<'info>,

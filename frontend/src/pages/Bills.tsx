@@ -1,89 +1,89 @@
 import { useEffect, useState } from 'react'
-import axios from 'axios'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { Connection, SystemProgram, Transaction, PublicKey } from '@solana/web3.js'
 import { toast } from 'react-toastify'
-import { API_URL, RPC_URL } from '../App'
+import { RPC_URL } from '../main'
+import { getBiilsByParticipant, useProgram } from '../api'
 
 export default function Bills() {
-	const { publicKey, sendTransaction } = useWallet()
-	const [settlements, setSettlements] = useState([])
+    const { publicKey, sendTransaction } = useWallet()
+    const program = useProgram()
+    const [settlements, setSettlements] = useState([])
 
-	useEffect(() => {
-		load()
-	}, [publicKey])
+    useEffect(() => {
+        load()
+    }, [publicKey])
 
-	const load = async () => {
-		if (!publicKey) return
-		const res = await axios.get(`${API_URL}/api/settlements?pbkey=${publicKey}`)
-		if (res.data.success) setSettlements(res.data.data)
-	}
+    const load = async () => {
+        if (!publicKey || !program)
+            return
 
-	const pay = async (s: any) => {
-		if (!publicKey) return toast.error("Connect wallet")
+        const bills = await getBiilsByParticipant(program, publicKey)
 
-		const conn = new Connection(RPC_URL)
+        setSettlements(bills)
+    }
 
-		const ix = SystemProgram.transfer({
-			fromPubkey: publicKey,
-			toPubkey: new PublicKey(s.to_address),
-			lamports: Number(s.amount),
-		})
+    const pay = async (s: any) => {
+        if (!publicKey) return toast.error("Connect wallet")
 
-		const tx = new Transaction().add(ix)
+        const conn = new Connection(RPC_URL)
 
-		const sig = await sendTransaction(tx, conn)
+        const ix = SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: new PublicKey(s.to_address),
+            lamports: Number(s.amount),
+        })
 
-		await axios.post(`${API_URL}/api/settlements/${s.id}/pay`, {
-			tx_signature: sig
-		})
+        const tx = new Transaction().add(ix)
 
-		toast.success("Оплачено!")
-		load()
-	}
+        const sig = await sendTransaction(tx, conn)
 
-	if (!publicKey)
-		return <h1 style={{ color: '#eee' }}>Подключите кошелёк</h1>
+        toast.success("Оплачено!")
+        load()
+    }
 
-	return (
-		<div className="card">
-			<h1>Мои счета</h1>
+    if (!publicKey)
+        return <h1 style={{ color: '#eee' }}>Подключите кошелёк</h1>
 
-			{settlements.length === 0 ? (
-				<p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
-					Счета не найдены
-				</p>
-			) : (
-				<table className="table">
-					<thead>
-						<tr>
-							<th>От</th>
-							<th>Кому</th>
-							<th>Сумма</th>
-							<th>Подтверждение</th>
-							<th></th>
-						</tr>
-					</thead>
-					<tbody>
-						{settlements.map((s: any) => (
-							<tr key={s.id}>
-								<td>{s.from_address.slice(0, 8)}...</td>
-								<td>{s.to_address.slice(0, 8)}...</td>
-								<td>{s.amount / 1e9} SOL</td>
-								<td>{s.tx_signature ? "Оплачено" : "Не оплачено"}</td>
-								<td>
-									{s.from_address === publicKey.toString() && !s.tx_signature && (
-										<button className="btn btn-primary" onClick={() => pay(s)}>
-											Оплатить
-										</button>
-									)}
-								</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			)
-			}
-		</div>
-	)
+    return (
+        <div className="card">
+            <h1>Мои счета</h1>
+
+            {settlements.length === 0 ? (
+                <p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
+                    Счета не найдены
+                </p>
+            ) : (
+                <table className="table">
+                    <thead>
+                        <tr>
+                            <th>От</th>
+                            <th>Кому</th>
+                            <th>Сумма</th>
+                            <th>Подтверждение</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {settlements.map((s: any) => (
+                            <tr key={s.id}>
+                                <td>{s.from_address.slice(0, 8)}...</td>
+                                <td>{s.to_address.slice(0, 8)}...</td>
+                                <td>{s.amount / 1e9} SOL</td>
+                                <td>{s.tx_signature ? "Оплачено" : "Не оплачено"}</td>
+                                <td>
+                                    {s.from_address === publicKey.toString() && !s.tx_signature && (
+                                        <button className="btn btn-primary" onClick={() => pay(s)}>
+                                            Оплатить
+                                        </button>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )
+            }
+        </div>
+    )
 }

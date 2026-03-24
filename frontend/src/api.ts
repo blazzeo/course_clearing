@@ -1,581 +1,449 @@
-import { AnchorProvider, BN, Program, setProvider } from '@coral-xyz/anchor';
+import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
 import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 
-const { connection } = useConnection();
-const wallet = useAnchorWallet()!;
-
-const provider = new AnchorProvider(connection, wallet, {});
-setProvider(provider)
-
-export const program = new Program(idl as ClearingSolana, provider)
-
-export async function initEscrow() {
-	const authority = wallet.publicKey;
-
-	// PDA escrow
-	const [escrow] = PublicKey.findProgramAddressSync(
-		[Buffer.from("escrow")],
-		program.programId
-	);
-
-	// PDA admin
-	const [admin] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
-
-	await program.methods
-		.initEscrow()
-		.accounts({
-			escrow,
-			admin,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+export function getProgram(provider: AnchorProvider): Program<ClearingSolana> {
+    return new Program<ClearingSolana>(
+        idl as ClearingSolana,
+        provider
+    );
 }
 
-export async function cancelObligation(from: PublicKey, to: PublicKey, timestamp: number) {
-	const authority = wallet.publicKey;
+export function useProgram() {
+    const { connection } = useConnection();
+    const wallet = useAnchorWallet();
 
-	// from_participant
-	const [fromParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), from.toBuffer()],
-		program.programId
-	);
+    if (!wallet) return null;
 
-	// to_participant
-	const [toParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), to.toBuffer()],
-		program.programId
-	);
-
-	const ts = new BN(timestamp)
-
-	// PDA admin
-	const [obligation] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("obligation"),
-			from.toBuffer(),
-			to.toBuffer(),
-			ts.toArrayLike(Buffer, "le", 8)
-		],
-		program.programId
-	);
-
-	await program.methods
-		.cancelObligation(from, to, ts)
-		.accounts({
-			fromParticipant,
-			toParticipant,
-			obligation,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    const provider = new AnchorProvider(connection, wallet, {});
+    return getProgram(provider);
 }
 
-export async function confirmObligation(from: PublicKey, to: PublicKey, timestamp: number) {
-	const authority = wallet.publicKey;
+export function getParticipantPda(
+    programId: PublicKey,
+    participantPubkey: PublicKey
+) {
+    const encoder = new TextEncoder();
 
-	// from_participant
-	const [fromParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), from.toBuffer()],
-		program.programId
-	);
+    const [pda] = PublicKey.findProgramAddressSync(
+        [
+            encoder.encode("participant"),
+            participantPubkey.toBuffer(),
+        ],
+        programId
+    );
 
-	// to_participant
-	const [toParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), to.toBuffer()],
-		program.programId
-	);
-
-	const ts = new BN(timestamp)
-
-	// PDA admin
-	const [obligation] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("obligation"),
-			from.toBuffer(),
-			to.toBuffer(),
-			ts.toArrayLike(Buffer, "le", 8)
-		],
-		program.programId
-	);
-
-	await program.methods
-		.confirmObligation(from, to, ts)
-		.accounts({
-			fromParticipant,
-			toParticipant,
-			obligation,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return pda;
 }
 
-export async function registerObligation(from: PublicKey, to: PublicKey, amount: number, pool_id: number, timestamp: number) {
-	const authority = wallet.publicKey;
-
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
-
-	const ts = new BN(timestamp)
-
-	// new_obligation
-	const [newObligation] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("obligation"),
-			from.toBuffer(),
-			to.toBuffer(),
-			ts.toArrayLike(Buffer, 'le', 8)
-		],
-		program.programId
-	);
-
-	// participant
-	const [participant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
-
-	const id = new BN(pool_id)
-
-	// pool
-	const [pool] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("pool"),
-			id.toArrayLike(Buffer, "le", 4)
-		],
-		program.programId
-	);
-
-	const amt = new BN(amount)
-
-	await program.methods
-		.registerObligation(from, to, amt, id, ts)
-		.accounts({
-			state,
-			newObligation,
-			participant,
-			pool,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+export async function getParticipant(
+    program: Program<ClearingSolana>,
+    pda: PublicKey
+) {
+    return await program.account.participant.fetchNullable(pda);
 }
 
-export async function declineObligation(from: PublicKey, to: PublicKey, timestamp: number) {
-	const authority = wallet.publicKey;
+export async function initEscrow(program: Program<ClearingSolana>) {
+    const authority = program.provider.publicKey;
 
-	const ts = new BN(timestamp)
-
-	// new_obligation
-	const [obligation] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("obligation"),
-			from.toBuffer(),
-			to.toBuffer(),
-			ts.toArrayLike(Buffer, 'le', 8)
-		],
-		program.programId
-	);
-
-	// from_participant
-	const [fromParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), from.toBuffer()],
-		program.programId
-	);
-
-	// to_participant
-	const [toParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), to.toBuffer()],
-		program.programId
-	);
-
-	await program.methods
-		.declineObligation(from, to, ts)
-		.accounts({
-			fromParticipant,
-			toParticipant,
-			obligation,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .initEscrow()
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function processObligation(from: PublicKey, to: PublicKey, timestamp: number) {
-	const authority = wallet.publicKey;
+export async function cancelObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	const ts = new BN(timestamp)
+    const ts = new BN(timestamp)
 
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
-
-	const stateAccount = await program.account.clearingState.fetch(state);
-
-	//	session
-	const [session] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from('session'),
-			new BN(stateAccount.totalSessions).toArrayLike(Buffer, 'le', 8),
-		],
-		program.programId
-	)
-
-	// obligation
-	const [obligation] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("obligation"),
-			from.toBuffer(),
-			to.toBuffer(),
-			ts.toArrayLike(Buffer, 'le', 8)
-		],
-		program.programId
-	);
-
-	const obligationAccount = await program.account.obligation.fetch(obligation);
-
-	const poolId = new BN(obligationAccount.poolId);
-
-	// pool
-	const [pool] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("pool"),
-			poolId.toArrayLike(Buffer, "le", 4)
-		],
-		program.programId
-	);
-
-	// from_position
-	const [fromPosition] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("position"),
-			session.toBuffer(),
-			from.toBuffer(),
-		],
-		program.programId
-	);
-
-	// to_position
-	const [toPosition] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from("position"),
-			session.toBuffer(),
-			to.toBuffer(),
-		],
-		program.programId
-	);
-
-
-	await program.methods
-		.processObligation(from, to, ts)
-		.accounts({
-			state,
-			session,
-			obligation,
-			pool,
-			fromPosition,
-			toPosition,
-			payer: authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .cancelObligation(from, to, ts)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function finalizeClearingSession() {
-	const authority = wallet.publicKey;
+export async function confirmObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
+    const ts = new BN(timestamp)
 
-	const stateAccount = await program.account.clearingState.fetch(state);
-
-	//	session
-	const [session] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from('session'),
-			new BN(stateAccount.totalSessions).toArrayLike(Buffer, 'le', 8),
-		],
-		program.programId
-	)
-
-	await program.methods
-		.finalizeClearingSession()
-		.accounts({
-			state,
-			session,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .confirmObligation(from, to, ts)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function startClearingSession() {
-	const authority = wallet.publicKey;
+export async function registerObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, amount: number, pool_id: number, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
+    const ts = new BN(timestamp)
 
-	const stateAccount = await program.account.clearingState.fetch(state);
+    const id = new BN(pool_id)
 
-	//	session
-	const [session] = PublicKey.findProgramAddressSync(
-		[
-			Buffer.from('session'),
-			new BN(stateAccount.totalSessions).toArrayLike(Buffer, 'le', 8),
-		],
-		program.programId
-	)
+    const amt = new BN(amount)
 
-	await program.methods
-		.startClearingSession()
-		.accounts({
-			state,
-			session,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .registerObligation(from, to, amt, id, ts)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function createNewPool(last_pool_id: number) {
-	const authority = wallet.publicKey;
+export async function declineObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	const lastpid = new BN(last_pool_id)
-	const nextpid = new BN(last_pool_id + 1)
+    const ts = new BN(timestamp)
 
-	// last pool
-	const [lastPool] = PublicKey.findProgramAddressSync(
-		[Buffer.from("pool"), lastpid.toArrayLike(Buffer, 'le', 4)],
-		program.programId
-	);
+    return await program.methods
+        .declineObligation(from, to, ts)
+        .accounts({
+            authority,
+        })
+        .rpc();
+}
 
-	// new pool
-	const [newPool] = PublicKey.findProgramAddressSync(
-		[Buffer.from("pool"), nextpid.toArrayLike(Buffer, 'le', 4)],
-		program.programId
-	);
+export async function processObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	await program.methods
-		.createNewPool(lastpid)
-		.accounts({
-			lastPool,
-			newPool,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    const ts = new BN(timestamp)
+
+    return await program.methods
+        .processObligation(from, to, ts)
+        .accounts({
+            payer: authority,
+        })
+        .rpc();
+}
+
+export async function finalizeClearingSession(program: Program<ClearingSolana>) {
+    const authority = program.provider.publicKey;
+
+    return await program.methods
+        .finalizeClearingSession()
+        .accounts({
+            authority,
+        })
+        .rpc();
+}
+
+export async function startClearingSession(program: Program<ClearingSolana>, totalObligations: number) {
+    const authority = program.provider.publicKey;
+
+    const total_obligations = new BN(totalObligations);
+
+    // state
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+
+    const stateAccount = await program.account.clearingState.fetch(state);
+
+    //	session
+    const [session] = PublicKey.findProgramAddressSync(
+        [
+            Buffer.from('session'),
+            new BN(stateAccount.totalSessions).toArrayLike(Buffer, 'le', 8),
+        ],
+        program.programId
+    )
+
+    return await program.methods
+        .startClearingSession(total_obligations)
+        .accounts({
+            session,
+            authority,
+        })
+        .rpc();
+}
+
+export async function createNewPool(program: Program<ClearingSolana>, last_pool_id: number) {
+    const authority = program.provider.publicKey;
+
+    const lastPoolId = new BN(last_pool_id)
+    const nextPoolId = new BN(last_pool_id + 1)
+
+    // new pool
+    const [newPool] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), nextPoolId.toArrayLike(Buffer, 'le', 4)],
+        program.programId
+    );
+
+    return await program.methods
+        .createNewPool(lastPoolId)
+        .accounts({
+            newPool,
+            authority,
+        })
+        .rpc();
 }
 
 //	TODO: need to fix logic(remove name_registry?)
-export async function registerParticipant(name: string) {
-	const authority = wallet.publicKey;
+export async function registerParticipant(program: Program<ClearingSolana>, nameHash: number[]) {
+    const authority = program.provider.publicKey;
 
-	const nm = new BN(name)
+    const encoder = new TextEncoder();
 
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
+    // state PDA
+    const [state] = PublicKey.findProgramAddressSync(
+        [encoder.encode("state")],
+        program.programId
+    );
 
-	// newParticipant
-	const [newParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
+    // participant PDA
+    const [newParticipant] = PublicKey.findProgramAddressSync(
+        [encoder.encode("participant"), authority.toBuffer()],
+        program.programId
+    );
 
-	// name registry
-	const [nameRegistry] = PublicKey.findProgramAddressSync(
-		[Buffer.from("name_registry"), nm.toArrayLike(Buffer, 'le', 4)],
-		program.programId
-	);
+    // nameRegistry PDA (ВАЖНО: 32 bytes)
+    const [nameRegistry] = PublicKey.findProgramAddressSync(
+        [encoder.encode("name_registry"), Uint8Array.from(nameHash)],
+        program.programId
+    );
 
-	await program.methods
-		.createNewPool(nm)
-		.accounts({
-			state,
-			newParticipant,
-			nameRegistry,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .registerParticipant(nameHash)
+        .accounts({
+            state,
+            newParticipant,
+            nameRegistry,
+            authority,
+            systemProgram: SystemProgram.programId
+        })
+        .rpc();
 }
 
-export async function settle_position(session_id: number, to: PublicKey, timestamp: number) {
-	const authority = wallet.publicKey;
+export async function settle_position(program: Program<ClearingSolana>, session_id: number, to: PublicKey, timestamp: number) {
+    const authority = program.provider.publicKey;
 
-	const sid = new BN(session_id);
+    const sid = new BN(session_id);
 
-	// session
-	const [session] = PublicKey.findProgramAddressSync(
-		[Buffer.from("session"), sid.toArrayLike(Buffer, 'le', 8)],
-		program.programId
-	);
+    const ts = new BN(timestamp);
 
-	// net_position
-	const [netPosition] = PublicKey.findProgramAddressSync(
-		[Buffer.from("position"), session.toBuffer(), authority.toBuffer()],
-		program.programId
-	);
+    // recipient
+    const recipient = to;
 
-	const ts = new BN(timestamp);
-
-	// obligation
-	const [obligation] = PublicKey.findProgramAddressSync(
-		[Buffer.from("obligation"), authority.toBuffer(), to.toBuffer(), ts.toArrayLike(Buffer, 'le', 8)],
-		program.programId
-	);
-
-	// recipient
-	const recipient = to;
-
-	await program.methods
-		.settlePosition(sid, to, ts)
-		.accounts({
-			session,
-			netPosition,
-			obligation,
-			authority,
-			recipient,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .settlePosition(sid, to, ts)
+        .accounts({
+            authority,
+            recipient,
+        })
+        .rpc();
 }
 
-export async function withdrawFee(amount: number) {
-	const authority = wallet.publicKey;
+export async function withdrawFee(program: Program<ClearingSolana>, amount: number) {
+    const authority = program.provider.publicKey;
 
-	const amt = new BN(amount)
+    const amt = new BN(amount)
 
-	// escrow
-	const [escrow] = PublicKey.findProgramAddressSync(
-		[Buffer.from("escrow")],
-		program.programId
-	);
-
-	await program.methods
-		.withdrawFee(amt)
-		.accounts({
-			escrow,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .withdrawFee(amt)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
 // TODO: fix userType enum
-export async function updateUserType(participant: PublicKey, userType: any) {
-	const authority = wallet.publicKey;
+export async function updateUserType(program: Program<ClearingSolana>, participant: PublicKey, userType: any) {
+    const authority = program.provider.publicKey;
 
-	// admin
-	const [admin] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
-
-	// target_participant
-	const [targetParticipant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), participant.toBuffer()],
-		program.programId
-	);
-
-	await program.methods
-		.updateUserType(participant, userType)
-		.accounts({
-			admin,
-			targetParticipant,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .updateUserType(participant, userType)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function payFee(session_id: number) {
-	const authority = wallet.publicKey;
+export async function payFee(program: Program<ClearingSolana>, session_id: number) {
+    const authority = program.provider.publicKey;
 
-	const sid = new BN(session_id)
+    const sid = new BN(session_id)
 
-	// escrow
-	const [escrow] = PublicKey.findProgramAddressSync(
-		[Buffer.from("escrow")],
-		program.programId
-	);
-
-	// participant
-	const [participant] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
-
-	// session
-	const [session] = PublicKey.findProgramAddressSync(
-		[Buffer.from("session"), sid.toArrayLike(Buffer, 'le', 8)],
-		program.programId
-	);
-
-	// net_position
-	const [netPosition] = PublicKey.findProgramAddressSync(
-		[Buffer.from("position"), session.toBuffer(), participant.toBuffer()],
-		program.programId
-	);
-
-	await program.methods
-		.payFee(sid)
-		.accounts({
-			escrow,
-			participant,
-			session,
-			netPosition,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+    return await program.methods
+        .payFee(sid)
+        .accounts({
+            authority,
+        })
+        .rpc();
 }
 
-export async function updateFeeRate(new_rate_bps: number) {
-	const authority = wallet.publicKey;
+export async function updateFeeRate(program: Program<ClearingSolana>, new_rate_bps: number) {
+    const authority = program.provider.publicKey;
 
-	const nrbps = new BN(new_rate_bps)
+    const nrbps = new BN(new_rate_bps)
 
-	// admin
-	const [admin] = PublicKey.findProgramAddressSync(
-		[Buffer.from("participant"), authority.toBuffer()],
-		program.programId
-	);
 
-	// state
-	const [state] = PublicKey.findProgramAddressSync(
-		[Buffer.from("state")],
-		program.programId
-	);
+    return await program.methods
+        .updateFeeRate(nrbps)
+        .accounts({
+            authority,
+        })
+        .rpc();
+}
 
-	await program.methods
-		.updateFeeRate(nrbps)
-		.accounts({
-			admin,
-			state,
-			authority,
-			systemProgram: SystemProgram.programId
-		})
-		.rpc();
+export async function getClearingState(program: Program<ClearingSolana>) {
+    const encoder = new TextEncoder()
+
+    const [statePda] = PublicKey.findProgramAddressSync(
+        [encoder.encode("state")],
+        program.programId
+    )
+
+    return await program.account.clearingState.fetch(statePda)
+}
+
+export async function getUserRole(
+    program: Program<ClearingSolana>,
+    publicKey: PublicKey
+): Promise<string> {
+    try {
+        const participantPda = getParticipantPda(program.programId, publicKey)
+
+        const participant = await program.account.participant.fetch(participantPda)
+
+        const ut = participant.userType
+
+        if (ut?.participant !== undefined) return 'counterparty'
+        if (ut?.admin !== undefined) return 'administrator'
+        if (ut?.officer !== undefined) return 'auditor'
+
+        return 'guest'
+    } catch {
+        return 'guest'
+    }
+}
+
+export async function getBalance(
+    connection: Connection,
+    pubkey: PublicKey
+): Promise<number> {
+    // Баланс берем как SOL на адресе (lamports -> SOL).
+    return await connection.getBalance(pubkey)
+}
+
+export function getPoolPda(
+    program: Program<ClearingSolana>,
+    poolId: number
+): PublicKey {
+    return PublicKey.findProgramAddressSync(
+        [
+            Buffer.from("pool"),
+            new BN(poolId).toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+    )[0]
+}
+
+export async function poolExists(connection: Connection, pda: PublicKey) {
+    const acc = await connection.getAccountInfo(pda)
+    return acc !== null
+}
+
+export async function getPool(
+    program: Program<ClearingSolana>,
+    pda: PublicKey
+) {
+    return await program.account.obligationPool.fetchNullable(pda);
+}
+
+export async function getObligations(
+    program: Program<ClearingSolana>,
+) {
+    return await program.account.obligation.all()
+}
+
+export async function getObligationsByParticipant(
+    program: Program<ClearingSolana>,
+    pubkey: PublicKey
+) {
+    const pubkeyBase58 = pubkey.toBase58()
+
+    const [fromPositions, toPositions] = await Promise.all([
+        // where from == pubkey
+        program.account.obligation.all([
+            {
+                memcmp: {
+                    offset: 9,
+                    bytes: pubkeyBase58,
+                },
+            },
+        ]),
+
+        // where to == pubkey
+        program.account.obligation.all([
+            {
+                memcmp: {
+                    offset: 41,
+                    bytes: pubkeyBase58,
+                },
+            },
+        ]),
+    ])
+
+    // убираем дубликаты (на всякий случай)
+    const map = new Map<string, any>()
+
+        ;[...fromPositions, ...toPositions].forEach(p => {
+            map.set(p.publicKey.toBase58(), p)
+        })
+
+    return Array.from(map.values())
+}
+
+export async function getBills(
+    program: Program<ClearingSolana>,
+) {
+    return await program.account.netPosition.all()
+}
+
+export async function getBiilsByParticipant(
+    program: Program<ClearingSolana>,
+    pubkey: PublicKey
+) {
+    const pubkeyBase58 = pubkey.toBase58()
+
+    const [fromPositions, toPositions] = await Promise.all([
+        // where from == pubkey
+        program.account.netPosition.all([
+            {
+                memcmp: {
+                    offset: 17,
+                    bytes: pubkeyBase58,
+                },
+            },
+        ]),
+
+        // where to == pubkey
+        program.account.netPosition.all([
+            {
+                memcmp: {
+                    offset: 81,
+                    bytes: pubkeyBase58,
+                },
+            },
+        ]),
+    ])
+
+    // убираем дубликаты (на всякий случай)
+    const map = new Map<string, any>()
+
+        ;[...fromPositions, ...toPositions].forEach(p => {
+            map.set(p.publicKey.toBase58(), p)
+        })
+
+    return Array.from(map.values())
 }

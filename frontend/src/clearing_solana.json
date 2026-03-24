@@ -1,5 +1,5 @@
 {
-  "address": "DtFHUe9366drd6czf5hocSrWswr2DRT9YQhrbfQRmt15",
+  "address": "GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd",
   "metadata": {
     "name": "clearing_solana",
     "version": "0.1.0",
@@ -116,6 +116,28 @@
           }
         },
         {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "obligation.pool_id",
+                "account": "Obligation"
+              }
+            ]
+          }
+        },
+        {
           "name": "authority",
           "signer": true
         },
@@ -124,7 +146,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "confirm_obligation",
@@ -241,7 +276,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "create_new_pool",
@@ -489,7 +537,30 @@
           }
         },
         {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "obligation.pool_id",
+                "account": "Obligation"
+              }
+            ]
+          }
+        },
+        {
           "name": "authority",
+          "writable": true,
           "signer": true
         },
         {
@@ -497,7 +568,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "finalize_clearing_session",
@@ -551,6 +635,49 @@
                 "kind": "account",
                 "path": "state.total_sessions",
                 "account": "ClearingState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "init_clearing_state",
+      "discriminator": [
+        202,
+        21,
+        24,
+        152,
+        254,
+        230,
+        235,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
               }
             ]
           }
@@ -958,7 +1085,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "register_obligation",
@@ -1104,6 +1244,10 @@
         {
           "name": "pool_id",
           "type": "u32"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
         }
       ]
     },
@@ -1194,7 +1338,7 @@
               },
               {
                 "kind": "arg",
-                "path": "name"
+                "path": "name_hash"
               }
             ]
           }
@@ -1211,8 +1355,13 @@
       ],
       "args": [
         {
-          "name": "name",
-          "type": "string"
+          "name": "name_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -1331,7 +1480,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "session_id",
+          "type": "u64"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "start_clearing_session",
@@ -1404,6 +1566,7 @@
       "accounts": [
         {
           "name": "admin",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1550,7 +1713,12 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "participant",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "update_user_type",
@@ -1636,6 +1804,10 @@
         }
       ],
       "args": [
+        {
+          "name": "participant",
+          "type": "pubkey"
+        },
         {
           "name": "user_type",
           "type": {
@@ -2509,16 +2681,7 @@
             "type": {
               "array": [
                 "pubkey",
-                100
-              ]
-            }
-          },
-          {
-            "name": "occupied",
-            "type": {
-              "array": [
-                "bool",
-                100
+                50
               ]
             }
           },
@@ -2528,12 +2691,6 @@
           },
           {
             "name": "next_pool",
-            "type": {
-              "option": "pubkey"
-            }
-          },
-          {
-            "name": "prev_pool",
             "type": {
               "option": "pubkey"
             }
@@ -2587,19 +2744,6 @@
                 "name": "UserType"
               }
             }
-          },
-          {
-            "name": "user_name",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "user_name_len",
-            "type": "u8"
           },
           {
             "name": "registration_timestamp",

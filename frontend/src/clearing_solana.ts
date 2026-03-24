@@ -5,7 +5,7 @@
  * IDL can be found at `target/idl/clearing_solana.json`.
  */
 export type ClearingSolana = {
-  "address": "DtFHUe9366drd6czf5hocSrWswr2DRT9YQhrbfQRmt15",
+  "address": "GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd",
   "metadata": {
     "name": "clearingSolana",
     "version": "0.1.0",
@@ -122,6 +122,28 @@ export type ClearingSolana = {
           }
         },
         {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "obligation.pool_id",
+                "account": "obligation"
+              }
+            ]
+          }
+        },
+        {
           "name": "authority",
           "signer": true
         },
@@ -130,7 +152,20 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "confirmObligation",
@@ -247,7 +282,20 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "createNewPool",
@@ -495,7 +543,30 @@ export type ClearingSolana = {
           }
         },
         {
+          "name": "pool",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "obligation.pool_id",
+                "account": "obligation"
+              }
+            ]
+          }
+        },
+        {
           "name": "authority",
+          "writable": true,
           "signer": true
         },
         {
@@ -503,7 +574,20 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "finalizeClearingSession",
@@ -557,6 +641,49 @@ export type ClearingSolana = {
                 "kind": "account",
                 "path": "state.total_sessions",
                 "account": "clearingState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initClearingState",
+      "discriminator": [
+        202,
+        21,
+        24,
+        152,
+        254,
+        230,
+        235,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
               }
             ]
           }
@@ -964,7 +1091,20 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "from",
+          "type": "pubkey"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "registerObligation",
@@ -1110,6 +1250,10 @@ export type ClearingSolana = {
         {
           "name": "poolId",
           "type": "u32"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
         }
       ]
     },
@@ -1200,7 +1344,7 @@ export type ClearingSolana = {
               },
               {
                 "kind": "arg",
-                "path": "name"
+                "path": "nameHash"
               }
             ]
           }
@@ -1217,8 +1361,13 @@ export type ClearingSolana = {
       ],
       "args": [
         {
-          "name": "name",
-          "type": "string"
+          "name": "nameHash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -1337,7 +1486,20 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "sessionId",
+          "type": "u64"
+        },
+        {
+          "name": "to",
+          "type": "pubkey"
+        },
+        {
+          "name": "timestamp",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "startClearingSession",
@@ -1410,6 +1572,7 @@ export type ClearingSolana = {
       "accounts": [
         {
           "name": "admin",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1556,7 +1719,12 @@ export type ClearingSolana = {
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "participant",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "updateUserType",
@@ -1642,6 +1810,10 @@ export type ClearingSolana = {
         }
       ],
       "args": [
+        {
+          "name": "participant",
+          "type": "pubkey"
+        },
         {
           "name": "userType",
           "type": {
@@ -2515,16 +2687,7 @@ export type ClearingSolana = {
             "type": {
               "array": [
                 "pubkey",
-                100
-              ]
-            }
-          },
-          {
-            "name": "occupied",
-            "type": {
-              "array": [
-                "bool",
-                100
+                50
               ]
             }
           },
@@ -2534,12 +2697,6 @@ export type ClearingSolana = {
           },
           {
             "name": "nextPool",
-            "type": {
-              "option": "pubkey"
-            }
-          },
-          {
-            "name": "prevPool",
             "type": {
               "option": "pubkey"
             }
@@ -2593,19 +2750,6 @@ export type ClearingSolana = {
                 "name": "userType"
               }
             }
-          },
-          {
-            "name": "userName",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "userNameLen",
-            "type": "u8"
           },
           {
             "name": "registrationTimestamp",
