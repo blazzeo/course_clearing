@@ -268,15 +268,17 @@ pub mod clearing_solana {
     }
 
     /// Method to register new participant
+    /// NameBytes is actual username and NameHash is just for PDA calculation
     pub fn register_participant(
         ctx: Context<RegisterParticipant>,
         name_hash: [u8; 32],
+        name: String,
     ) -> Result<()> {
         let clock = Clock::get()?;
 
         // Save name hash in Registry
         let registry = &mut ctx.accounts.name_registry;
-        registry.name_bytes = name_hash;
+        registry.name = name.to_lowercase().trim().to_string();
         registry.participant = ctx.accounts.authority.key();
         registry.bump = ctx.bumps.name_registry;
 
@@ -287,7 +289,6 @@ pub mod clearing_solana {
         participant.registration_timestamp = clock.unix_timestamp;
         participant.update_timestamp = clock.unix_timestamp;
         participant.last_session_id = 0;
-        participant.name_registry = ctx.accounts.name_registry.key();
         participant.bump = ctx.bumps.new_participant;
 
         // Update system state
@@ -297,7 +298,7 @@ pub mod clearing_solana {
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
 
-        msg!("Participant PDA: {}", participant.key());
+        msg!("Participant created: {}", participant.key());
 
         Ok(())
     }
@@ -338,6 +339,8 @@ pub mod clearing_solana {
 
         obligation.status = ObligationStatus::Netted;
 
+        msg!("Position {} settled", net_position.key());
+
         Ok(())
     }
 
@@ -370,6 +373,8 @@ pub mod clearing_solana {
             amount: obligation.amount,
             timestamp: clock.unix_timestamp
         });
+
+        msg!("Obligation {} confirmed", obligation.key());
 
         Ok(())
     }
@@ -492,7 +497,7 @@ pub mod clearing_solana {
         system_program::transfer(cpi_ctx, net_position.fee_amount)?;
 
         //  Update state
-        net_position.fee_paid = true;
+        net_position.status = NetPositionStatus::FeePaid;
         escrow.total_fees = escrow
             .total_fees
             .checked_add(net_position.fee_amount)
@@ -565,6 +570,8 @@ pub mod clearing_solana {
 
             let to_participant = &mut ctx.accounts.to_participant;
             to_participant.update_timestamp = clock.unix_timestamp;
+
+            msg!("Obligation {} cancelled by creditor", obligation.key());
         }
 
         //  Cancel by 'from_participant'
@@ -574,6 +581,8 @@ pub mod clearing_solana {
 
             let from_participant = &mut ctx.accounts.from_participant;
             from_participant.update_timestamp = clock.unix_timestamp;
+
+            msg!("Obligation {} cancelled by debitor", obligation.key());
         }
 
         //  Check for both confirmations
@@ -630,7 +639,7 @@ pub struct PayFee<'info> {
         mut,
         seeds = [b"position", session.key().as_ref(), participant.key().as_ref()],
         bump,
-        constraint = !net_position.fee_paid @ PayFeeError::AlreadyPaid,
+        constraint = net_position.status != NetPositionStatus::FeePaid @ PayFeeError::AlreadyPaid,
     )]
     pub net_position: Account<'info, NetPosition>,
 
@@ -735,49 +744,65 @@ impl Escrow {
 /// uses can occupy name, so next will see it is used
 #[account]
 pub struct NameRegistry {
-    pub name_bytes: [u8; 32],
+    pub name: String,
     pub participant: Pubkey,
     pub bump: u8,
 }
 
 impl NameRegistry {
-    pub const LEN: usize = 32 + // name_bytes
+    pub const LEN: usize = 4 + 32 + // name (max 32 bytes)
         32 + // participant
         1; // bump
 
-    pub fn pda_by_name(name_hash: &[u8; 32]) -> (Pubkey, u8) {
+    pub fn pda(name_hash: &[u8; 32]) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"name_registry", name_hash.as_ref()], &crate::ID)
     }
 
-    pub fn set_name(&mut self, name: &str) {
-        let bytes = name.as_bytes();
+    pub fn set_name(&mut self, name: &str) -> Result<()> {
+        let normalized = name.trim().to_lowercase();
 
-        self.name_bytes = [0u8; 32]; // cleanup
+        require!(!normalized.is_empty(), CustomErrors::EmptyName);
 
-        let len = bytes.len().min(32);
-        self.name_bytes[..len].copy_from_slice(&bytes[..len]);
+        let mut result = String::new();
+
+        for c in normalized.chars() {
+            if result.len() + c.len_utf8() > 32 {
+                break;
+            }
+            result.push(c);
+        }
+
+        self.name = result;
+
+        Ok(())
     }
 }
 
-//  TODO: Add status + fix if creditor has muiltiple debitors
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum NetPositionStatus {
+    None, // start: no fee payment
+    FeePaid,
+    Done, // means fee paid + creditor transfered net amount
+}
+
 #[account]
 pub struct NetPosition {
+    pub status: NetPositionStatus,
     pub session_id: u64,
     pub creditor: Pubkey,
     pub debitor: Pubkey,
     pub net_amount: u64,
     pub fee_amount: u64,
-    pub fee_paid: bool,
     pub bump: u8,
 }
 
 impl NetPosition {
-    pub const LEN: usize = 8 + // session_id
+    pub const LEN: usize = 1 + // status
+        8 + // session_id
         32 + // creditor
         32 + // debitor
         8 + // net_amount
         8 + // fee_amount
-        1 + // fee_paid
         1; // bump
 }
 
@@ -940,7 +965,7 @@ pub enum PoolError {
     NotFound,
 }
 
-/// Participant of system, can be Admin, User, Officer(Observer)
+/// Participant of system, can be Admin, Participant
 #[account]
 pub struct Participant {
     pub authority: Pubkey,
@@ -948,7 +973,6 @@ pub struct Participant {
     pub registration_timestamp: i64,
     pub update_timestamp: i64,
     pub last_session_id: u64,
-    pub name_registry: Pubkey,
     pub bump: u8,
 }
 
@@ -960,7 +984,6 @@ impl Participant {
         8 + // registration_timestamp
         8 + // update_timestamp
         8 + // last_session_id
-        32 + // name_registry
         1; // bump
 
     pub fn pda(pubkey: Pubkey) -> (Pubkey, u8) {
@@ -1481,12 +1504,12 @@ pub struct RegisterParticipant<'info> {
     pub state: Account<'info, ClearingState>,
 
     #[account(
-            init,
-            payer = authority,
-            space = 8 + Participant::LEN,
-            seeds = [b"participant", authority.key().as_ref()],
-            bump
-        )]
+        init,
+        payer = authority,
+        space = 8 + Participant::LEN,
+        seeds = [b"participant", authority.key().as_ref()],
+        bump
+    )]
     pub new_participant: Account<'info, Participant>,
 
     #[account(
@@ -1518,7 +1541,7 @@ pub struct SettlePosition<'info> {
         mut,
         seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
         bump,
-        constraint = net_position.fee_paid @ SettlePositionError::FeeNotPaid,
+        constraint = net_position.status == NetPositionStatus::FeePaid @ SettlePositionError::FeeNotPaid,
         constraint = net_position.net_amount > 0 @ SettlePositionError::NoNeedInPayment
     )]
     pub net_position: Account<'info, NetPosition>,
@@ -1700,6 +1723,8 @@ pub enum CustomErrors {
     Unauthorized,
     #[msg("Forbidden")]
     Forbidden,
+    #[msg("Empty name")]
+    EmptyName,
 }
 
 #[error_code]

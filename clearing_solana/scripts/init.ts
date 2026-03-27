@@ -26,23 +26,23 @@ async function main() {
 
     console.log("State initialized");
 
-    const name = "user1";
-    const nameBytes = new TextEncoder().encode(name);
-
-    const nameHash = new Uint8Array(32);
-    nameHash.set(nameBytes.slice(0, 32));
-
-    // 👇 ВАЖНО
-    const nameHashArray = Array.from(nameHash);
-
-    await program.methods
-        .registerParticipant(nameHashArray)
-        .accounts({
-            authority,
-        })
-        .rpc();
-
-    console.log("User registered");
+    // const name = "user1";
+    // const nameBytes = new TextEncoder().encode(name);
+    //
+    // const nameHash = new Uint8Array(32);
+    // nameHash.set(nameBytes.slice(0, 32));
+    //
+    // // 👇 ВАЖНО
+    // const nameHashArray = Array.from(nameHash);
+    //
+    // await program.methods
+    //     .registerParticipant(nameHashArray)
+    //     .accounts({
+    //         authority,
+    //     })
+    //     .rpc();
+    //
+    // console.log("User registered");
 }
 
 main().catch(console.error);
