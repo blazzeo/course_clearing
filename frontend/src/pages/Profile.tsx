@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react'
-import { PublicKey, } from '@solana/web3.js'
 import { toast } from 'react-toastify'
 import { getBalance, getParticipant, getParticipantPda, registerParticipant, useProgram } from '../api'
-import { sha256 } from 'js-sha256'
 
 interface UserProfile {
     address: string
@@ -15,6 +13,14 @@ interface UserProfile {
     updated_at?: string
 }
 
+export function RoleMap(user_type: string): String {
+    switch (user_type) {
+        case 'counterparty': return 'Контрагент';
+        case 'admin': return 'Администратор';
+        default: return 'Гость'
+    }
+}
+
 export default function Profile() {
     const anchorWallet = useAnchorWallet()
     const { connection } = useConnection()
@@ -23,12 +29,9 @@ export default function Profile() {
 
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [loading, setLoading] = useState(true)
-    const [editing, setEditing] = useState(false)
+    const [isModalOpen, setIsModalOpen] = useState(false);
     const [blockchainInitializing, setBlockchainInitializing] = useState(false)
     const [registrationName, setRegistrationName] = useState('')
-    const [formData, setFormData] = useState({
-        name: '',
-    })
 
     useEffect(() => {
         if (!publicKey || !program) return
@@ -50,7 +53,6 @@ export default function Profile() {
             let participantAccount: any = null
             try {
                 participantAccount = await getParticipant(program, participantPda)
-                console.log(participantAccount)
             } catch {
                 participantAccount = null
             }
@@ -66,19 +68,8 @@ export default function Profile() {
                     created_at: '',
                     updated_at: '',
                 })
-                setFormData({
-                    name: '',
-                })
                 return
             }
-
-            const nameRegistryPda = participantAccount.nameRegistry as PublicKey
-            const nameRegistryAccount: any = await program.account.nameRegistry.fetch(nameRegistryPda)
-
-            const nameBytes: number[] = Array.from(nameRegistryAccount.nameBytes ?? [])
-            const endIdx = nameBytes.indexOf(0)
-            const safeEnd = endIdx === -1 ? nameBytes.length : endIdx
-            const name = new TextDecoder().decode(Uint8Array.from(nameBytes.slice(0, safeEnd)))
 
             const ut = participantAccount.userType
             const role =
@@ -91,7 +82,7 @@ export default function Profile() {
 
             setProfile({
                 address: publicKey.toBase58(),
-                name: name,
+                name: participantAccount.name,
                 user_type: role,
                 is_active: true,
                 balance: balanceLamports,
@@ -99,9 +90,6 @@ export default function Profile() {
                 updated_at: updateTimestamp ? new Date(updateTimestamp * 1000).toISOString() : '',
             })
 
-            setFormData({
-                name: name,
-            })
         } catch (error) {
             console.error('Error loading profile from blockchain:', error)
             toast.error('Ошибка загрузки профиля из блокчейна')
@@ -111,12 +99,6 @@ export default function Profile() {
         }
     }
 
-    const handleUpdateProfile = async () => {
-        // В текущем контракте нет инструкций для изменения полей профиля.
-        toast.info('Редактирование профиля пока недоступно')
-        setEditing(false)
-    }
-
     const registerParticipantOnChain = async () => {
         if (!publicKey || !program) return
 
@@ -124,24 +106,20 @@ export default function Profile() {
 
         if (!name) {
             toast.error('Введите имя для профиля');
+            setRegistrationName('')
             return;
         }
 
         if (name.length > 32) {
             toast.error('Имя должно быть не длиннее 32 символов');
+            setRegistrationName('')
             return;
         }
 
         try {
             setBlockchainInitializing(true)
 
-            // ✅ SHA256 → Uint8Array (32 bytes)
-            const hashBytes = new Uint8Array(sha256.array(name));
-
-            // ✅ Anchor ожидает number[]
-            const nameHash = Array.from(hashBytes);
-
-            const tx = await registerParticipant(program, nameHash);
+            const tx = await registerParticipant(program, name);
 
             const latestBlockhash = await program.provider.connection.getLatestBlockhash();
 
@@ -157,17 +135,9 @@ export default function Profile() {
             console.error('registerParticipantOnChain error:', error)
             toast.error('Ошибка регистрации профиля')
         } finally {
+            setRegistrationName('')
             setBlockchainInitializing(false)
         }
-    }
-
-    const handleCancel = () => {
-        if (profile) {
-            setFormData({
-                name: profile.name || '',
-            })
-        }
-        setEditing(false)
     }
 
     if (loading) {
@@ -184,190 +154,121 @@ export default function Profile() {
 
             {/* Плашка для гостей */}
             {profile.user_type === 'guest' && (
-                <div style={{
-                    background: '#fff3cd',
-                    border: '1px solid #ffeaa7',
-                    borderRadius: '8px',
-                    padding: '16px',
-                    marginBottom: '24px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '12px'
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-                        <div style={{
-                            width: '24px',
-                            height: '24px',
-                            borderRadius: '50%',
-                            background: '#856404',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'white',
-                            fontSize: '14px',
-                            fontWeight: 'bold'
-                        }}>
-                            !
+                <div style={{ marginBottom: '24px' }}>
+                    <button
+                        onClick={() => setIsModalOpen(true)}
+                        className={"btn btn-secondary"}
+                    >
+                        Зарегистрироваться
+                    </button>
+                </div>
+            )
+            }
+
+            <div className="profile">
+
+                <div className="profile_header">
+                    <div>
+                        <h2 className="profile_title">
+                            {profile.name || 'Пользователь'}
+                        </h2>
+                        <p className="profile_subtitle">
+                            {RoleMap(profile.user_type)}
+                        </p>
+                    </div>
+
+                    <div className="profile_balance">
+                        <div className="profile_balance-label">
+                            Баланс
                         </div>
-                        <div style={{ flex: 1 }}>
-                            <h4 style={{ margin: '0 0 4px 0', color: '#856404' }}>
-                                Аккаунт не найден
-                            </h4>
-                            <p style={{ margin: 0, color: '#856404', fontSize: '14px' }}>
-                                Ваш аккаунт имеет статус "Гость".
-                            </p>
+                        <div className="profile_balance-value">
+                            {(profile.balance / 1e9).toFixed(4)} SOL
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                </div>
+
+                <div className="profile_section">
+                    <p className="profile_label">Адрес кошелька</p>
+                    <div className="profile_wallet">
+                        {profile.address}
+                    </div>
+                </div>
+
+                <div className="profile_grid">
+
+                    <div>
+                        <p className="profile_label">Имя</p>
+                        <p>{profile.name || 'Не указано'}</p>
+                    </div>
+
+                    <div>
+                        <p className="profile_label">Роль</p>
+                        <p>{RoleMap(profile.user_type)}</p>
+                    </div>
+
+                    <div>
+                        <p className="profile_label">Дата регистрации</p>
+                        <p>
+                            {profile.created_at
+                                ? new Date(profile.created_at).toLocaleString()
+                                : 'Неизвестно'}
+                        </p>
+                    </div>
+
+                    <div>
+                        <p className="profile_label">Обновлено</p>
+                        <p>
+                            {profile.updated_at
+                                ? new Date(profile.updated_at).toLocaleString()
+                                : 'Не обновлялось'}
+                        </p>
+                    </div>
+
+                </div>
+            </div>
+
+            {
+                isModalOpen && (
+                    <div className="modal-overlay">
+                        <div className="modal">
+
+                            <h3 className="modal-title">Регистрация</h3>
+
                             <input
                                 type="text"
                                 value={registrationName}
-                                placeholder="Имя (до 32 символов)"
+                                placeholder="Введите имя (< 32 символа)"
                                 onChange={(e) => setRegistrationName(e.target.value)}
                                 disabled={blockchainInitializing}
-                                style={{
-                                    padding: '8px 12px',
-                                    border: '1px solid #ddd',
-                                    borderRadius: '4px',
-                                    minWidth: '260px',
-                                    fontSize: '14px'
-                                }}
+                                className="modal-input"
                             />
-                            <button
-                                onClick={registerParticipantOnChain}
-                                disabled={blockchainInitializing}
-                                style={{
-                                    padding: '8px 16px',
-                                    background: blockchainInitializing ? '#ccc' : '#667eea',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: blockchainInitializing ? 'not-allowed' : 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                {blockchainInitializing ? 'Регистрация...' : 'Зарегистрировать в блокчейне'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
-            <div style={{ background: 'white', padding: '24px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                <div style={{ marginBottom: '24px' }}>
-                    <h3>Основная информация</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Адрес кошелька:</label>
-                            <div style={{ fontFamily: 'monospace', fontSize: '14px', wordBreak: 'break-all' }}>
-                                {profile.address}
-                            </div>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Роль:</label>
-                            <div>
-                                {profile.user_type === 'guest' ? 'Гость' :
-                                    profile.user_type === 'counterparty' ? 'Контрагент' :
-                                        profile.user_type === 'auditor' ? 'Аудитор' :
-                                            profile.user_type === 'administrator' ? 'Администратор' : 'Неизвестно'}
-                            </div>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Баланс:</label>
-                            <div>{profile.balance} лампортов</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div style={{ marginBottom: '24px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                        <h3>Личная информация</h3>
-                        {!editing ? (
-                            <button
-                                onClick={() => toast.info('Редактирование имени пока недоступно')}
-                                style={{
-                                    padding: '8px 16px',
-                                    background: '#667eea',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer'
-                                }}
-                            >
-                                Редактировать
-                            </button>
-                        ) : (
-                            <div style={{ display: 'flex', gap: '8px' }}>
+                            <div className="modal-actions">
                                 <button
-                                    onClick={handleUpdateProfile}
-                                    style={{
-                                        padding: '8px 16px',
-                                        background: '#4caf50',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer'
-                                    }}
-                                >
-                                    Сохранить
-                                </button>
-                                <button
-                                    onClick={handleCancel}
-                                    style={{
-                                        padding: '8px 16px',
-                                        background: '#f44336',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer'
-                                    }}
+                                    className="btn btn-secondary"
+                                    onClick={() => setIsModalOpen(false)}
                                 >
                                     Отмена
                                 </button>
-                            </div>
-                        )}
-                    </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Имя:</label>
-                            {editing ? (
-                                <input
-                                    type="text"
-                                    value={formData.name}
-                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                    style={{
-                                        width: '100%',
-                                        padding: '8px',
-                                        border: '1px solid #ddd',
-                                        borderRadius: '4px'
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => {
+                                        registerParticipantOnChain();
+                                        setIsModalOpen(false);
                                     }}
-                                />
-                            ) : (
-                                <div>{profile.name || 'Не указано'}</div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                <div>
-                    <h3>Даты</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Дата регистрации:</label>
-                            <div>
-                                {profile.created_at ? new Date(profile.created_at).toLocaleString() : 'Неизвестно'}
+                                    disabled={blockchainInitializing}
+                                >
+                                    {blockchainInitializing ? 'Регистрация...' : 'Подтвердить'}
+                                </button>
                             </div>
-                        </div>
-                        <div>
-                            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '4px' }}>Последнее обновление:</label>
-                            <div>{profile.updated_at ? new Date(profile.updated_at).toLocaleString() : 'Не обновлялось'}</div>
+
                         </div>
                     </div>
-                </div>
-            </div>
-        </div>
+                )
+            }
+
+        </div >
+
     )
 }

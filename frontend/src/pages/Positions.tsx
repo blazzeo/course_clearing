@@ -5,8 +5,17 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { cancelObligation, confirmObligation, getObligationsByParticipant, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
 
-interface Obligation {
-    status: any;
+export enum ObligationStatus {
+    Created,
+    Confirmed,
+    Declined,
+    Netted,
+    Cancelled,
+}
+
+export interface Obligation {
+    pubkey: string;
+    status: ObligationStatus;
     from: PublicKey;
     to: PublicKey;
     amount: number;
@@ -16,6 +25,16 @@ interface Obligation {
     toCancel: boolean;
     poolId: number;
     bump: number;
+}
+
+export function MapObligationStatus(status: ObligationStatus) {
+    switch (status) {
+        case ObligationStatus.Created: return "Created";
+        case ObligationStatus.Confirmed: return "Confirmed";
+        case ObligationStatus.Declined: return "Declined";
+        case ObligationStatus.Netted: return "Netted";
+        case ObligationStatus.Cancelled: return "Cancelled";
+    }
 }
 
 export default function Positions() {
@@ -41,11 +60,14 @@ export default function Positions() {
 
             const obligations = await getObligationsByParticipant(program, publicKey)
 
+            console.log(obligations)
+
             setPositions(obligations)
 
         } catch (error) {
             console.error('Error loading positions:', error)
         } finally {
+            console.log("here")
             setLoading(false)
         }
     }
@@ -140,22 +162,22 @@ export default function Positions() {
         }
     }
 
-    const getStatusClass = (status: string) => {
+    const getStatusClass = (status: ObligationStatus) => {
         switch (status) {
-            case 'pending':
+            case ObligationStatus.Created:
                 return 'status-badge status-pending'
-            case 'confirmed':
+            case ObligationStatus.Confirmed:
                 return 'status-badge status-confirmed'
-            case 'cleared':
+            case ObligationStatus.Netted:
                 return 'status-badge status-cleared'
             default:
                 return 'status-badge'
         }
     }
 
-    const formatDate = (dateString: string | null) => {
-        if (!dateString) return '-'
-        return new Date(dateString).toLocaleString('ru-RU')
+    const formatDate = (date: number | null) => {
+        if (!date) return '-'
+        return new Date(date).toLocaleString('ru-RU')
     }
 
     // Если кошелёк не подключён — возвращаем пустую страницу
@@ -222,14 +244,12 @@ export default function Positions() {
                                     <td>{position.amount / 1e9} SOL</td>
                                     <td>
                                         <span className={getStatusClass(position.status)}>
-                                            {position.status === 'pending' && 'Без подтверждения'}
-                                            {position.status === 'confirmed' && 'Подтверждена'}
-                                            {position.status === 'cleared' && 'Выполнена'}
+                                            {MapObligationStatus(position.status)}
                                         </span>
                                     </td>
-                                    <td>{formatDate(position.timestamp.toString())}</td>
+                                    <td>{formatDate(position.timestamp)}</td>
                                     <td>
-                                        {position.status === 'pending' && position.to === publicKey && (
+                                        {position.status === ObligationStatus.Created && position.to === publicKey && (
                                             <button
                                                 className="btn btn-primary"
                                                 style={{ padding: '6px 12px', fontSize: '14px' }}
@@ -239,7 +259,7 @@ export default function Positions() {
                                                 {actionLoading === position ? 'Подтверждение...' : 'Подтвердить'}
                                             </button>
                                         )}
-                                        {position.status === 'pending' && position.from === publicKey && (
+                                        {position.status === ObligationStatus.Created && position.from === publicKey && (
                                             <button
                                                 className="btn btn-danger"
                                                 style={{ padding: '6px 12px', fontSize: '14px', marginLeft: '8px' }}
@@ -249,10 +269,10 @@ export default function Positions() {
                                                 {actionLoading === position ? 'Отмена...' : 'Отменить'}
                                             </button>
                                         )}
-                                        {position.status === 'confirmed' && (
+                                        {position.status === ObligationStatus.Confirmed && (
                                             <span style={{ color: '#666' }}>На обработке</span>
                                         )}
-                                        {position.status === 'cleared' && (
+                                        {position.status === ObligationStatus.Netted && (
                                             <span style={{ color: '#666' }}>Завершено</span>
                                         )}
                                     </td>

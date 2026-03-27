@@ -20,6 +20,8 @@ export default function Bills() {
 
         const bills = await getBiilsByParticipant(program, publicKey)
 
+        console.log(bills)
+
         setSettlements(bills)
     }
 

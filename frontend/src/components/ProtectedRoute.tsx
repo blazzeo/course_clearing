@@ -21,8 +21,6 @@ export default function ProtectedRoute({
 }: ProtectedRouteProps) {
     const { publicKey } = useWallet()
 
-    console.log(requiredRoles)
-
     // Проверяем подключение кошелька если требуется
     if (requireWallet && !publicKey) {
         return <AccessDenied resource={resource} />

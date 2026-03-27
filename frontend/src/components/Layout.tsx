@@ -25,11 +25,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
 
             try {
                 const user_type = await getUserRole(program, publicKey);
-
-                console.log(user_type)
-
                 onRoleUpdate(user_type)
-
             } catch (error) {
                 console.error('Error updating user role:', error);
                 // При ошибке устанавливаем гостя
@@ -87,7 +83,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                                     style={{
                                         textDecoration: 'none',
                                         color: location.pathname === '/positions/create' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/positions' ? '600' : '400'
+                                        fontWeight: location.pathname === '/positions/create' ? '600' : '400'
                                     }}
                                 >
                                     Создать позицию
@@ -101,16 +97,6 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                                     }}
                                 >
                                     Мои счета
-                                </Link>
-                                <Link
-                                    to="/funds"
-                                    style={{
-                                        textDecoration: 'none',
-                                        color: location.pathname === '/funds' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/funds' ? '600' : '400'
-                                    }}
-                                >
-                                    Управление средствами
                                 </Link>
                             </>
                         )}
@@ -195,9 +181,3 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
         </div >
     )
 }
-
-
-
-
-
-

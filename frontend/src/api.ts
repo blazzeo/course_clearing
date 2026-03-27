@@ -3,6 +3,9 @@ import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
 import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
+import { sha256 } from 'js-sha256';
+import { toast } from 'react-toastify';
+import { Obligation, ObligationStatus } from './pages/Positions';
 
 export function getProgram(provider: AnchorProvider): Program<ClearingSolana> {
     return new Program<ClearingSolana>(
@@ -188,11 +191,19 @@ export async function createNewPool(program: Program<ClearingSolana>, last_pool_
         .rpc();
 }
 
-//	TODO: need to fix logic(remove name_registry?)
-export async function registerParticipant(program: Program<ClearingSolana>, nameHash: number[]) {
-    const authority = program.provider.publicKey;
+export async function registerParticipant(program: Program<ClearingSolana>, name: string) {
+    const authority = program.provider.publicKey!;
 
     const encoder = new TextEncoder();
+
+    name = name.trim().toLowerCase()
+
+    // ✅ SHA256 → Uint8Array (32 bytes)
+    // const nameBytes = new Uint8Array(name)
+    const hashBytes = new Uint8Array(sha256.array(name));
+
+    // ✅ Anchor ожидает number[]
+    const nameHash = Array.from(hashBytes);
 
     // state PDA
     const [state] = PublicKey.findProgramAddressSync(
@@ -213,7 +224,7 @@ export async function registerParticipant(program: Program<ClearingSolana>, name
     );
 
     return await program.methods
-        .registerParticipant(nameHash)
+        .registerParticipant(nameHash, name)
         .accounts({
             state,
             newParticipant,
@@ -369,11 +380,10 @@ export async function getObligations(
 export async function getObligationsByParticipant(
     program: Program<ClearingSolana>,
     pubkey: PublicKey
-) {
+): Promise<Obligation[]> {
     const pubkeyBase58 = pubkey.toBase58()
 
     const [fromPositions, toPositions] = await Promise.all([
-        // where from == pubkey
         program.account.obligation.all([
             {
                 memcmp: {
@@ -382,8 +392,6 @@ export async function getObligationsByParticipant(
                 },
             },
         ]),
-
-        // where to == pubkey
         program.account.obligation.all([
             {
                 memcmp: {
@@ -394,20 +402,49 @@ export async function getObligationsByParticipant(
         ]),
     ])
 
-    // убираем дубликаты (на всякий случай)
-    const map = new Map<string, any>()
+    const map = new Map<string, Obligation>()
 
-        ;[...fromPositions, ...toPositions].forEach(p => {
-            map.set(p.publicKey.toBase58(), p)
+        ;[...fromPositions, ...toPositions].forEach((p) => {
+            const acc = p.account
+
+            const ot = acc.status
+            let obligation_status: ObligationStatus = ObligationStatus.Created
+
+            if (ot?.created !== undefined) obligation_status = ObligationStatus.Created
+            if (ot?.netted !== undefined) obligation_status = ObligationStatus.Netted
+            if (ot?.declined !== undefined) obligation_status = ObligationStatus.Declined
+            if (ot?.confirmed !== undefined) obligation_status = ObligationStatus.Confirmed
+            if (ot?.cancelled !== undefined) obligation_status = ObligationStatus.Cancelled
+
+            const obligation: Obligation = {
+                pubkey: p.publicKey.toBase58(),
+                status: obligation_status,
+                from: acc.from,
+                to: acc.to,
+                amount: Number(acc.amount.toString()),
+                timestamp: acc.timestamp.toNumber(),  // 👈 BN → number
+                sessionId: acc.sessionId,
+                fromCancel: acc.fromCancel,
+                toCancel: acc.toCancel,
+                poolId: acc.poolId,
+                bump: acc.bump,
+            }
+
+            map.set(p.publicKey.toBase58(), obligation)
         })
 
-    return Array.from(map.values())
+    let obligaions = Array.from(map.values())
+
+    return obligaions
 }
 
 export async function getBills(
     program: Program<ClearingSolana>,
 ) {
-    return await program.account.netPosition.all()
+    console.log('compute..')
+    let bills = await program.account.netPosition.all();
+    console.log('computed')
+    return
 }
 
 export async function getBiilsByParticipant(
@@ -416,6 +453,7 @@ export async function getBiilsByParticipant(
 ) {
     const pubkeyBase58 = pubkey.toBase58()
 
+    console.log('compute..')
     const [fromPositions, toPositions] = await Promise.all([
         // where from == pubkey
         program.account.netPosition.all([
@@ -437,6 +475,7 @@ export async function getBiilsByParticipant(
             },
         ]),
     ])
+    console.log('computed')
 
     // убираем дубликаты (на всякий случай)
     const map = new Map<string, any>()

@@ -658,6 +658,77 @@ export type ClearingSolana = {
       "args": []
     },
     {
+      "name": "initAdmin",
+      "discriminator": [
+        97,
+        65,
+        97,
+        27,
+        200,
+        206,
+        72,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  99,
+                  105,
+                  112,
+                  97,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initClearingState",
       "discriminator": [
         202,
@@ -1260,7 +1331,8 @@ export type ClearingSolana = {
     {
       "name": "registerParticipant",
       "docs": [
-        "Method to register new participant"
+        "Method to register new participant",
+        "NameBytes is actual username and NameHash is just for PDA calculation"
       ],
       "discriminator": [
         248,
@@ -1368,6 +1440,10 @@ export type ClearingSolana = {
               32
             ]
           }
+        },
+        {
+          "name": "name",
+          "type": "string"
         }
       ]
     },
@@ -2269,6 +2345,12 @@ export type ClearingSolana = {
             "type": "pubkey"
           },
           {
+            "name": "superAdmin",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
             "name": "totalSessions",
             "type": "u64"
           },
@@ -2413,15 +2495,6 @@ export type ClearingSolana = {
         "kind": "struct",
         "fields": [
           {
-            "name": "nameBytes",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
             "name": "participant",
             "type": "pubkey"
           },
@@ -2438,28 +2511,53 @@ export type ClearingSolana = {
         "kind": "struct",
         "fields": [
           {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "netPositionStatus"
+              }
+            }
+          },
+          {
             "name": "sessionId",
             "type": "u64"
           },
           {
-            "name": "participant",
+            "name": "creditor",
+            "type": "pubkey"
+          },
+          {
+            "name": "debitor",
             "type": "pubkey"
           },
           {
             "name": "netAmount",
-            "type": "i64"
+            "type": "u64"
           },
           {
             "name": "feeAmount",
             "type": "u64"
           },
           {
-            "name": "feePaid",
-            "type": "bool"
-          },
-          {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "netPositionStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "none"
+          },
+          {
+            "name": "feePaid"
+          },
+          {
+            "name": "done"
           }
         ]
       }
@@ -2734,7 +2832,7 @@ export type ClearingSolana = {
     {
       "name": "participant",
       "docs": [
-        "Participant of system, can be Admin, User, Officer(Observer)"
+        "Participant of system, can be Admin, Participant"
       ],
       "type": {
         "kind": "struct",
@@ -2764,8 +2862,8 @@ export type ClearingSolana = {
             "type": "u64"
           },
           {
-            "name": "nameRegistry",
-            "type": "pubkey"
+            "name": "name",
+            "type": "string"
           },
           {
             "name": "bump",

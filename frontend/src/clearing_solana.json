@@ -652,6 +652,77 @@
       "args": []
     },
     {
+      "name": "init_admin",
+      "discriminator": [
+        97,
+        65,
+        97,
+        27,
+        200,
+        206,
+        72,
+        219
+      ],
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  114,
+                  116,
+                  105,
+                  99,
+                  105,
+                  112,
+                  97,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "init_clearing_state",
       "discriminator": [
         202,
@@ -1254,7 +1325,8 @@
     {
       "name": "register_participant",
       "docs": [
-        "Method to register new participant"
+        "Method to register new participant",
+        "NameBytes is actual username and NameHash is just for PDA calculation"
       ],
       "discriminator": [
         248,
@@ -1362,6 +1434,10 @@
               32
             ]
           }
+        },
+        {
+          "name": "name",
+          "type": "string"
         }
       ]
     },
@@ -2263,6 +2339,12 @@
             "type": "pubkey"
           },
           {
+            "name": "super_admin",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
             "name": "total_sessions",
             "type": "u64"
           },
@@ -2407,15 +2489,6 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "name_bytes",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
             "name": "participant",
             "type": "pubkey"
           },
@@ -2432,28 +2505,53 @@
         "kind": "struct",
         "fields": [
           {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "NetPositionStatus"
+              }
+            }
+          },
+          {
             "name": "session_id",
             "type": "u64"
           },
           {
-            "name": "participant",
+            "name": "creditor",
+            "type": "pubkey"
+          },
+          {
+            "name": "debitor",
             "type": "pubkey"
           },
           {
             "name": "net_amount",
-            "type": "i64"
+            "type": "u64"
           },
           {
             "name": "fee_amount",
             "type": "u64"
           },
           {
-            "name": "fee_paid",
-            "type": "bool"
-          },
-          {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NetPositionStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "None"
+          },
+          {
+            "name": "FeePaid"
+          },
+          {
+            "name": "Done"
           }
         ]
       }
@@ -2728,7 +2826,7 @@
     {
       "name": "Participant",
       "docs": [
-        "Participant of system, can be Admin, User, Officer(Observer)"
+        "Participant of system, can be Admin, Participant"
       ],
       "type": {
         "kind": "struct",
@@ -2758,8 +2856,8 @@
             "type": "u64"
           },
           {
-            "name": "name_registry",
-            "type": "pubkey"
+            "name": "name",
+            "type": "string"
           },
           {
             "name": "bump",

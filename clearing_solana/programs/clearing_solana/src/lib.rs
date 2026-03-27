@@ -24,6 +24,25 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    pub fn init_admin(ctx: Context<InitAdmin>) -> Result<()> {
+        let clock = Clock::get()?;
+
+        let admin = &mut ctx.accounts.admin;
+        let state = &mut ctx.accounts.state;
+
+        state.super_admin = Some(ctx.accounts.authority.key());
+
+        admin.authority = ctx.accounts.authority.key();
+        admin.registration_timestamp = clock.unix_timestamp;
+        admin.bump = ctx.bumps.admin;
+        admin.user_type = UserType::Admin;
+        admin.last_session_id = 0;
+        admin.name = "super admin".into();
+        admin.update_timestamp = clock.unix_timestamp;
+
+        Ok(())
+    }
+
     /// Method to create new obligation(from-to-amount)
     pub fn register_obligation(
         ctx: Context<RegisterObligation>,
@@ -278,7 +297,6 @@ pub mod clearing_solana {
 
         // Save name hash in Registry
         let registry = &mut ctx.accounts.name_registry;
-        registry.name = name.to_lowercase().trim().to_string();
         registry.participant = ctx.accounts.authority.key();
         registry.bump = ctx.bumps.name_registry;
 
@@ -289,6 +307,7 @@ pub mod clearing_solana {
         participant.registration_timestamp = clock.unix_timestamp;
         participant.update_timestamp = clock.unix_timestamp;
         participant.last_session_id = 0;
+        participant.name = name;
         participant.bump = ctx.bumps.new_participant;
 
         // Update system state
@@ -744,37 +763,16 @@ impl Escrow {
 /// uses can occupy name, so next will see it is used
 #[account]
 pub struct NameRegistry {
-    pub name: String,
     pub participant: Pubkey,
     pub bump: u8,
 }
 
 impl NameRegistry {
-    pub const LEN: usize = 4 + 32 + // name (max 32 bytes)
-        32 + // participant
+    pub const LEN: usize = 32 + // participant
         1; // bump
 
     pub fn pda(name_hash: &[u8; 32]) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"name_registry", name_hash.as_ref()], &crate::ID)
-    }
-
-    pub fn set_name(&mut self, name: &str) -> Result<()> {
-        let normalized = name.trim().to_lowercase();
-
-        require!(!normalized.is_empty(), CustomErrors::EmptyName);
-
-        let mut result = String::new();
-
-        for c in normalized.chars() {
-            if result.len() + c.len_utf8() > 32 {
-                break;
-            }
-            result.push(c);
-        }
-
-        self.name = result;
-
-        Ok(())
     }
 }
 
@@ -973,6 +971,7 @@ pub struct Participant {
     pub registration_timestamp: i64,
     pub update_timestamp: i64,
     pub last_session_id: u64,
+    pub name: String,
     pub bump: u8,
 }
 
@@ -984,6 +983,7 @@ impl Participant {
         8 + // registration_timestamp
         8 + // update_timestamp
         8 + // last_session_id
+        4 + 32 + // name
         1; // bump
 
     pub fn pda(pubkey: Pubkey) -> (Pubkey, u8) {
@@ -1032,6 +1032,7 @@ impl PoolManager {
 #[account]
 pub struct ClearingState {
     pub authority: Pubkey,
+    pub super_admin: Option<Pubkey>,
     pub total_sessions: u64,
     pub total_participants: u64,
     pub total_obligations: u64,
@@ -1042,6 +1043,7 @@ pub struct ClearingState {
 
 impl ClearingState {
     pub const LEN: usize = 32 + // authority
+        33 + // super_admin
         8 + // total_sessions
         8 + // total_participants
         8 + // total_obligations
@@ -1439,11 +1441,6 @@ pub struct CreateNewPool<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[error_code]
-pub enum CreateNewPoolError {
-    PoolNotLast,
-}
-
 #[derive(Accounts)]
 pub struct CreatePoolManager<'info> {
     #[account(
@@ -1469,6 +1466,11 @@ pub struct CreatePoolManager<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[error_code]
+pub enum CreateNewPoolError {
+    PoolNotLast,
+}
+
 #[derive(Accounts)]
 pub struct InitEscrow<'info> {
     #[account(
@@ -1481,11 +1483,35 @@ pub struct InitEscrow<'info> {
     pub escrow: Account<'info, Escrow>,
 
     #[account(
-            seeds = [b"participant", authority.key().as_ref()],
-            bump,
-            constraint = admin.user_type == UserType::Admin @ CustomErrors::Forbidden,
-            constraint = authority.key() == admin.authority @ CustomErrors::Unauthorized
-        )]
+        seeds = [b"participant", authority.key().as_ref()],
+        bump,
+        constraint = admin.user_type == UserType::Admin @ CustomErrors::Forbidden,
+        constraint = authority.key() == admin.authority @ CustomErrors::Unauthorized
+    )]
+    pub admin: Account<'info, Participant>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitAdmin<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump,
+        constraint = state.super_admin.is_none() @ CustomErrors::AdminAlreadyExists
+    )]
+    pub state: Account<'info, ClearingState>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + Participant::LEN,
+        seeds = [b"participant", authority.key().as_ref()],
+        bump
+    )]
     pub admin: Account<'info, Participant>,
 
     #[account(mut)]
@@ -1499,7 +1525,7 @@ pub struct RegisterParticipant<'info> {
     #[account(
         mut,
         seeds = [b"state"],
-        bump
+        bump,
     )]
     pub state: Account<'info, ClearingState>,
 
@@ -1725,6 +1751,7 @@ pub enum CustomErrors {
     Forbidden,
     #[msg("Empty name")]
     EmptyName,
+    AdminAlreadyExists,
 }
 
 #[error_code]
