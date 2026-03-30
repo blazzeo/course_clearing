@@ -40,6 +40,8 @@ export default function Bills() {
 
         const sig = await sendTransaction(tx, conn)
 
+        console.log(sig)
+
         toast.success("Оплачено!")
         load()
     }

@@ -3,11 +3,12 @@ import { Link, useLocation } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { getUserRole, useProgram } from '../api'
+import { UserType } from '../interfaces'
 
 interface LayoutProps {
     children: ReactNode
-    userRole: string
-    onRoleUpdate: (role: string) => void
+    userRole: UserType
+    onRoleUpdate: (role: UserType) => void
 }
 
 export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps) {
@@ -19,7 +20,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
     useEffect(() => {
         const updateUserRole = async () => {
             if (!publicKey || !program) {
-                onRoleUpdate('guest');
+                onRoleUpdate(UserType.Guest);
                 return;
             }
 
@@ -29,7 +30,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
             } catch (error) {
                 console.error('Error updating user role:', error);
                 // При ошибке устанавливаем гостя
-                onRoleUpdate('guest');
+                onRoleUpdate(UserType.Guest);
             }
         };
 
@@ -66,7 +67,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                         )}
 
                         {/* Ссылки для контрагентов */}
-                        {userRole === 'counterparty' && (
+                        {userRole === UserType.Counterparty && (
                             <>
                                 <Link
                                     to="/positions"
@@ -101,22 +102,8 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                             </>
                         )}
 
-                        {/* Ссылки для аудиторов */}
-                        {userRole === 'auditor' && (
-                            <Link
-                                to="/auditor"
-                                style={{
-                                    textDecoration: 'none',
-                                    color: location.pathname === '/auditor' ? '#667eea' : '#666',
-                                    fontWeight: location.pathname === '/auditor' ? '600' : '400'
-                                }}
-                            >
-                                Аудит
-                            </Link>
-                        )}
-
                         {/* Ссылки для администраторов */}
-                        {userRole === 'administrator' && (
+                        {userRole === UserType.Administator && (
                             <>
                                 <Link
                                     to="/admin"
@@ -165,10 +152,9 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                                     </span>
                             }
                             <span style={{ fontSize: '12px', color: '#666' }}>
-                                Роль: {userRole === 'guest' ? 'Гость' :
-                                    userRole === 'counterparty' ? 'Контрагент' :
-                                        userRole === 'auditor' ? 'Аудитор' :
-                                            userRole === 'administrator' ? 'Администратор' : 'Неизвестно'}
+                                Роль: {userRole === UserType.Guest ? 'Гость' :
+                                    userRole === UserType.Counterparty ? 'Контрагент' :
+                                        userRole === UserType.Administator ? 'Администратор' : 'Неизвестно'}
                             </span>
                         </div>
                         <WalletMultiButton />

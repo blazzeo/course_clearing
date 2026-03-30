@@ -1,0 +1,47 @@
+import { PublicKey } from "@solana/web3.js";
+
+export enum ObligationStatus {
+    Created,
+    Confirmed,
+    Declined,
+    Netted,
+    Cancelled,
+}
+
+export interface Obligation {
+    pubkey: string;
+    status: ObligationStatus;
+    from: PublicKey;
+    to: PublicKey;
+    amount: number;
+    timestamp: number;
+    sessionId: any;
+    fromCancel: boolean;
+    toCancel: boolean;
+    poolId: number;
+    bump: number;
+}
+
+export enum UserType {
+    Guest,
+    Administator,
+    Counterparty
+}
+
+export interface Participant {
+    pda: PublicKey,
+    authority: PublicKey,
+    userType: UserType,
+    registrationTimestamp: number,
+    updateTimestamp: number,
+    lastSessionId: number,
+    name: String,
+    bump: number,
+}
+
+export interface SystemInfo {
+    total_participants: number
+    total_sessions: number
+    total_obligations: number
+    fee_rate_bps: string
+}

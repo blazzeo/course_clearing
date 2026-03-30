@@ -2,19 +2,13 @@ import { Link } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useEffect, useState } from 'react'
 import { getClearingState, getUserRole, useProgram } from '../api'
-
-interface SystemInfo {
-    total_participants: number
-    total_sessions: number
-    total_obligations: number
-    fee_rate_bps: string
-}
+import { SystemInfo, UserType } from '../interfaces'
 
 export default function Home() {
     const { publicKey } = useWallet()
     const program = useProgram()
     const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
-    const [userRole, setUserRole] = useState<string>('guest')
+    const [userRole, setUserRole] = useState<UserType>(UserType.Guest)
 
     useEffect(() => {
         loadSystemInfo()
@@ -42,7 +36,7 @@ export default function Home() {
 
     const loadUserRole = async () => {
         if (!publicKey || !program) {
-            setUserRole('guest')
+            setUserRole(UserType.Guest)
             return
         }
 
@@ -51,7 +45,7 @@ export default function Home() {
             setUserRole(user_role)
         } catch (error) {
             console.error(error)
-            setUserRole('guest')
+            setUserRole(UserType.Guest)
         }
     }
 
@@ -67,14 +61,14 @@ export default function Home() {
 
                 {/* Кнопки действий в зависимости от роли */}
                 <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                    {userRole === 'guest' && publicKey && (
+                    {userRole === UserType.Guest && publicKey && (
                         <>
                             <Link to="/profile" className="btn btn-primary">
                                 Профиль
                             </Link>
                         </>
                     )}
-                    {userRole === 'counterparty' && (
+                    {userRole === UserType.Counterparty && (
                         <>
                             <Link to="/positions/create" className="btn btn-primary">
                                 Создать позицию
@@ -90,12 +84,7 @@ export default function Home() {
                             </Link>
                         </>
                     )}
-                    {userRole === 'auditor' && (
-                        <Link to="/auditor" className="btn btn-primary">
-                            Аудит системы
-                        </Link>
-                    )}
-                    {userRole === 'administrator' && (
+                    {userRole === UserType.Administator && (
                         <Link to="/admin" className="btn btn-primary">
                             Админ панель
                         </Link>

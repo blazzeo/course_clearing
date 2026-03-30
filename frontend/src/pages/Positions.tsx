@@ -3,29 +3,7 @@ import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { cancelObligation, confirmObligation, getObligationsByParticipant, useProgram } from '../api'
-import { PublicKey } from '@solana/web3.js'
-
-export enum ObligationStatus {
-    Created,
-    Confirmed,
-    Declined,
-    Netted,
-    Cancelled,
-}
-
-export interface Obligation {
-    pubkey: string;
-    status: ObligationStatus;
-    from: PublicKey;
-    to: PublicKey;
-    amount: number;
-    timestamp: number;
-    sessionId: any;
-    fromCancel: boolean;
-    toCancel: boolean;
-    poolId: number;
-    bump: number;
-}
+import { Obligation, ObligationStatus } from '../interfaces'
 
 export function MapObligationStatus(status: ObligationStatus) {
     switch (status) {
@@ -285,9 +263,3 @@ export default function Positions() {
         </div>
     )
 }
-
-
-
-
-
-

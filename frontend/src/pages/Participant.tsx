@@ -1,19 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import axios from 'axios'
-import { API_URL } from '../main'
+import { Participant } from '../interfaces'
+import { getParticipant, getParticipantPda, useProgram } from '../api'
+import { PublicKey } from '@solana/web3.js'
 
-interface ParticipantData {
-    id: number,
-    address: string,
-    user_type: string,
-    created_at: number
-}
-
-export default function Participant() {
+export default function ParticipantPage() {
     const { address } = useParams<{ address: string }>()
-    const [participant, setParticipant] = useState<ParticipantData | null>(null)
+    const [participant, setParticipant] = useState<Participant | null>(null)
     const [loading, setLoading] = useState(true)
+
+    const program = useProgram()
 
     useEffect(() => {
         if (address) {
@@ -22,12 +18,19 @@ export default function Participant() {
     }, [address])
 
     const loadParticipant = async () => {
+        if (!program || !address)
+            return
+
         try {
             setLoading(true)
-            const response = await axios.get(`${API_URL}/api/participants/${address}`)
-            if (response.data.success) {
-                setParticipant(response.data.data)
-            }
+
+            const participantPubkey = new PublicKey(address)
+
+            const pda = getParticipantPda(program.programId, participantPubkey)
+            const participant = await getParticipant(program, pda)
+
+            setParticipant(participant)
+
         } catch (error) {
             console.error('Error loading participant:', error)
         } finally {
@@ -57,7 +60,7 @@ export default function Participant() {
                         fontFamily: 'monospace',
                         wordBreak: 'break-all'
                     }}>
-                        {participant.address}
+                        {participant.authority.toBase58()}
                     </p>
                 </div>
 
@@ -71,7 +74,7 @@ export default function Participant() {
                         fontWeight: 'bold',
                         color: '#667eea'
                     }}>
-                        {participant.created_at}
+                        {participant.registrationTimestamp}
                     </p>
                 </div>
 
@@ -79,9 +82,3 @@ export default function Participant() {
         </div>
     )
 }
-
-
-
-
-
-

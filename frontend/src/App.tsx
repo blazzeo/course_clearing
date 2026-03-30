@@ -5,7 +5,6 @@ import Positions from './pages/Positions'
 import CreatePosition from './pages/CreatePosition'
 import Bills from './pages/Bills'
 import AdminPanel from './pages/AdminPanel'
-import AuditorPanel from './pages/AuditorPanel'
 import Profile from './pages/Profile'
 import Funds from './pages/Funds'
 import AccessDenied from './pages/AccessDenied'
@@ -18,11 +17,12 @@ import { Route, Routes } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { getParticipantPda, getUserRole, useProgram } from './api'
+import { UserType } from './interfaces'
 
 function App() {
     const { publicKey } = useWallet();
     const program = useProgram();
-    const [userRole, setUserRole] = useState<string>('guest');
+    const [userRole, setUserRole] = useState<UserType>(UserType.Guest);
 
     useEffect(() => {
         authenticateUser()
@@ -30,7 +30,7 @@ function App() {
 
     const authenticateUser = async () => {
         if (!publicKey || !program) {
-            setUserRole('guest');
+            setUserRole(UserType.Guest);
             return;
         }
 
@@ -42,7 +42,7 @@ function App() {
             setUserRole(participant_role)
         } catch (error) {
             console.error(error);
-            setUserRole('guest');
+            setUserRole(UserType.Guest);
         }
     }
 
@@ -62,7 +62,7 @@ function App() {
                     {/* Защищенные маршруты для контрагентов */}
                     <Route path="/positions" element={
                         <ProtectedRoute
-                            requiredRoles={['counterparty', 'administrator']}
+                            requiredRoles={[UserType.Counterparty]}
                             resource="/positions"
                             requireWallet={true}
                             userRole={userRole}
@@ -72,7 +72,7 @@ function App() {
                     } />
                     <Route path="/positions/create" element={
                         <ProtectedRoute
-                            requiredRoles={['counterparty', 'administrator']}
+                            requiredRoles={[UserType.Counterparty]}
                             resource="/positions/create"
                             requireWallet={true}
                             userRole={userRole}
@@ -82,7 +82,7 @@ function App() {
                     } />
                     <Route path="/bills" element={
                         <ProtectedRoute
-                            requiredRoles={['counterparty', 'administrator']}
+                            requiredRoles={[UserType.Counterparty]}
                             resource="/bills"
                             requireWallet={true}
                             userRole={userRole}
@@ -92,7 +92,7 @@ function App() {
                     } />
                     <Route path="/funds" element={
                         <ProtectedRoute
-                            requiredRoles={['counterparty', 'administrator']}
+                            requiredRoles={[UserType.Counterparty]}
                             resource="/funds"
                             requireWallet={true}
                             userRole={userRole}
@@ -101,22 +101,10 @@ function App() {
                         </ProtectedRoute>
                     } />
 
-                    {/* Защищенные маршруты для аудиторов */}
-                    <Route path="/auditor" element={
-                        <ProtectedRoute
-                            requiredRole="auditor"
-                            resource="/auditor"
-                            requireWallet={true}
-                            userRole={userRole}
-                        >
-                            <AuditorPanel />
-                        </ProtectedRoute>
-                    } />
-
                     {/* Защищенные маршруты для администраторов */}
                     <Route path="/admin" element={
                         <ProtectedRoute
-                            requiredRole="administrator"
+                            requiredRoles={[UserType.Administator]}
                             resource="/admin"
                             requireWallet={true}
                             userRole={userRole}

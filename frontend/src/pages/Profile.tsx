@@ -2,22 +2,14 @@ import { useEffect, useState } from 'react'
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { getBalance, getParticipant, getParticipantPda, registerParticipant, useProgram } from '../api'
+import { Participant, UserType } from '../interfaces';
 
-interface UserProfile {
-    address: string
-    user_type: string
-    name: string
-    is_active: boolean
-    balance: number
-    created_at: string
-    updated_at?: string
-}
-
-export function RoleMap(user_type: string): String {
-    switch (user_type) {
-        case 'counterparty': return 'Контрагент';
-        case 'admin': return 'Администратор';
-        default: return 'Гость'
+export function UserTypeToString(userType: UserType): String {
+    switch (userType) {
+        case UserType.Counterparty: return 'Контрагент';
+        case UserType.Administator: return 'Администратор';
+        case UserType.Guest: return 'Гость';
+        default: return 'Неизвестно'
     }
 }
 
@@ -27,7 +19,7 @@ export default function Profile() {
     const program = useProgram()
     const publicKey = anchorWallet?.publicKey ?? null
 
-    const [profile, setProfile] = useState<UserProfile | null>(null)
+    const [profile, setProfile] = useState<Participant | null>(null)
     const [loading, setLoading] = useState(true)
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [blockchainInitializing, setBlockchainInitializing] = useState(false)
@@ -50,17 +42,12 @@ export default function Profile() {
             // Participant PDA
             const participantPda = getParticipantPda(program.programId, publicKey);
 
-            let participantAccount: any = null
-            try {
-                participantAccount = await getParticipant(program, participantPda)
-            } catch {
-                participantAccount = null
-            }
+            const participant = await getParticipant(program, participantPda)
 
             // Если аккаунта участника нет — показываем "гостя".
-            if (!participantAccount) {
+            if (!participant) {
                 setProfile({
-                    address: publicKey.toBase58(),
+                    authority: publicKey.toBase58(),
                     name: '',
                     user_type: 'guest',
                     is_active: false,
@@ -71,24 +58,7 @@ export default function Profile() {
                 return
             }
 
-            const ut = participantAccount.userType
-            const role =
-                ut?.participant !== undefined ? 'counterparty' :
-                    ut?.admin !== undefined ? 'administrator' :
-                        ut?.officer !== undefined ? 'auditor' : 'guest'
-
-            const registrationTimestamp = participantAccount.registrationTimestamp?.toNumber?.() ?? participantAccount.registrationTimestamp ?? 0
-            const updateTimestamp = participantAccount.updateTimestamp?.toNumber?.() ?? participantAccount.updateTimestamp ?? 0
-
-            setProfile({
-                address: publicKey.toBase58(),
-                name: participantAccount.name,
-                user_type: role,
-                is_active: true,
-                balance: balanceLamports,
-                created_at: registrationTimestamp ? new Date(registrationTimestamp * 1000).toISOString() : '',
-                updated_at: updateTimestamp ? new Date(updateTimestamp * 1000).toISOString() : '',
-            })
+            setProfile(participant)
 
         } catch (error) {
             console.error('Error loading profile from blockchain:', error)
@@ -153,7 +123,7 @@ export default function Profile() {
             <h1 style={{ paddingBottom: '30px', color: 'white' }}>Профиль пользователя</h1>
 
             {/* Плашка для гостей */}
-            {profile.user_type === 'guest' && (
+            {profile.userType === UserType.Guest && (
                 <div style={{ marginBottom: '24px' }}>
                     <button
                         onClick={() => setIsModalOpen(true)}
@@ -173,7 +143,7 @@ export default function Profile() {
                             {profile.name || 'Пользователь'}
                         </h2>
                         <p className="profile_subtitle">
-                            {RoleMap(profile.user_type)}
+                            {UserTypeToString(profile.userType)}
                         </p>
                     </div>
 
@@ -190,7 +160,7 @@ export default function Profile() {
                 <div className="profile_section">
                     <p className="profile_label">Адрес кошелька</p>
                     <div className="profile_wallet">
-                        {profile.address}
+                        {profile.authority.toBase58()}
                     </div>
                 </div>
 
@@ -203,14 +173,14 @@ export default function Profile() {
 
                     <div>
                         <p className="profile_label">Роль</p>
-                        <p>{RoleMap(profile.user_type)}</p>
+                        <p>{UserTypeToString(profile.userType)}</p>
                     </div>
 
                     <div>
                         <p className="profile_label">Дата регистрации</p>
                         <p>
-                            {profile.created_at
-                                ? new Date(profile.created_at).toLocaleString()
+                            {profile.registrationTimestamp
+                                ? new Date(profile.registrationTimestamp).toLocaleString()
                                 : 'Неизвестно'}
                         </p>
                     </div>
@@ -218,8 +188,8 @@ export default function Profile() {
                     <div>
                         <p className="profile_label">Обновлено</p>
                         <p>
-                            {profile.updated_at
-                                ? new Date(profile.updated_at).toLocaleString()
+                            {profile.updateTimestamp
+                                ? new Date(profile.updateTimestamp).toLocaleString()
                                 : 'Не обновлялось'}
                         </p>
                     </div>

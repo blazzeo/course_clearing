@@ -1,23 +1,9 @@
 import { useEffect, useState } from 'react'
-import axios from 'axios'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-
-interface ParticipantData {
-    id?: number,
-    address: string,
-    user_type: string,
-    email?: string,
-    first_name?: string,
-    last_name?: string,
-    phone?: string,
-    company?: string,
-    is_active: boolean,
-    balance: number,
-    created_at: string,
-    updated_at?: string
-}
+import { getAllParticipants, getClearingState, getUserRole, useProgram } from '../api'
+import { Participant, UserType } from '../interfaces'
 
 interface SystemSetting {
     id: number,
@@ -29,8 +15,7 @@ interface SystemSetting {
 }
 
 export default function AdminPanel() {
-    const [admins, setAdmins] = useState<ParticipantData[]>([])
-    const [allUsers, setAllUsers] = useState<ParticipantData[]>([])
+    const [allUsers, setAllUsers] = useState<Participant[]>([])
     const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([])
     const [loading, setLoading] = useState(true)
     const [isAdmin, setIsAdmin] = useState(false)
@@ -41,23 +26,21 @@ export default function AdminPanel() {
     const [newSetting, setNewSetting] = useState({ key: '', value: '', description: '' })
 
     const { publicKey } = useWallet()
+    const program = useProgram()
 
     useEffect(() => {
         checkAdminStatus()
     }, [publicKey])
 
     const checkAdminStatus = async () => {
-        if (!publicKey) {
+        if (!publicKey || !program) {
             setCheckingAdmin(false)
             return
         }
 
         try {
-            const userAddress = publicKey.toBase58()
-            const response = await axios.get(`${API_URL}/api/admins/check/${userAddress}`)
-            if (response.data.success) {
-                setIsAdmin(response.data.data)
-            }
+            if (await getUserRole(program, publicKey) == UserType.Administator)
+                setIsAdmin(isAdmin)
         } catch (error) {
             console.error('Error checking admin status:', error)
             toast.error('Ошибка при проверке прав администратора')
@@ -67,7 +50,7 @@ export default function AdminPanel() {
     }
 
     const executeClearingHandler = async () => {
-        if (!publicKey) {
+        if (!publicKey || !program) {
             toast.error("Кошелек не найден")
             return
         }
@@ -83,30 +66,18 @@ export default function AdminPanel() {
 
     useEffect(() => {
         if (isAdmin) {
-            loadAdmins()
             loadAllUsers()
             loadSystemSettings()
         }
     }, [isAdmin])
 
-    const loadAdmins = async () => {
-        try {
-            const response = await axios.get(`${API_URL}/api/admins`)
-            if (response.data.success) {
-                setAdmins(response.data.data || [])
-            }
-        } catch (error) {
-            console.error('Error loading admins:', error)
-            toast.error('Ошибка при загрузке списка админов')
-        }
-    }
-
     const loadAllUsers = async () => {
+        if (!program)
+            return
+
         try {
-            const response = await axios.get(`${API_URL}/api/participants`)
-            if (response.data.success) {
-                setAllUsers(response.data.data || [])
-            }
+            const participants = await getAllParticipants(program)
+            setAllUsers(participants)
         } catch (error) {
             console.error('Error loading users:', error)
             toast.error('Ошибка при загрузке списка пользователей')
@@ -114,12 +85,14 @@ export default function AdminPanel() {
     }
 
     const loadSystemSettings = async () => {
+        if (!publicKey || !program)
+            return
+
         try {
             setLoading(true)
-            const response = await axios.get(`${API_URL}/api/system/settings`)
-            if (response.data.success) {
-                setSystemSettings(response.data.data || [])
-            }
+
+            const _state = await getClearingState(program)
+            // TODO: fix system settings
         } catch (error) {
             console.error('Error loading settings:', error)
             toast.error('Ошибка при загрузке системных настроек')
@@ -128,145 +101,7 @@ export default function AdminPanel() {
         }
     }
 
-    const addAdmin = async () => {
-        if (!newAdminAddress.trim()) {
-            toast.error('Введите адрес пользователя')
-            return
-        }
-
-        try {
-            setActionLoading(true)
-            const response = await axios.post(`${API_URL}/api/admins/add`, {
-                address: newAdminAddress.trim(),
-                user_type: 'admin'
-            })
-
-            if (response.data.success) {
-                toast.success('Админ успешно добавлен')
-                setNewAdminAddress('')
-                loadAdmins() // Перезагружаем список
-            } else {
-                toast.error(response.data.error || 'Ошибка при добавлении админа')
-            }
-        } catch (error: any) {
-            console.error('Error adding admin:', error)
-            const errorMessage = error.response?.data?.error || 'Ошибка при добавлении админа'
-            toast.error(errorMessage)
-        } finally {
-            setActionLoading(false)
-        }
-    }
-
-    const changeUserRole = async (address: string, newRole: string) => {
-        if (!confirm(`Вы уверены, что хотите изменить роль пользователя ${address.slice(0, 8)}...${address.slice(-8)} на "${newRole}"?`)) {
-            return
-        }
-
-        try {
-            setActionLoading(true)
-            const response = await axios.post(`${API_URL}/api/admin/change-role?admin_address=${publicKey?.toBase58()}`, {
-                address,
-                user_type: newRole
-            })
-
-            if (response.data.success) {
-                toast.success('Роль пользователя изменена')
-                loadAllUsers()
-                loadAdmins()
-            } else {
-                toast.error(response.data.error || 'Ошибка при изменении роли')
-            }
-        } catch (error: any) {
-            console.error('Error changing role:', error)
-            const errorMessage = error.response?.data?.error || 'Ошибка при изменении роли'
-            toast.error(errorMessage)
-        } finally {
-            setActionLoading(false)
-        }
-    }
-
-    const toggleUserStatus = async (address: string, isActive: boolean) => {
-        const action = isActive ? 'деактивиров' : 'активиров'
-        if (!confirm(`Вы уверены, что хотите ${action}ать пользователя ${address.slice(0, 8)}...${address.slice(-8)}?`)) {
-            return
-        }
-
-        try {
-            setActionLoading(true)
-            const endpoint = isActive ? 'deactivate' : 'activate'
-            const response = await axios.post(`${API_URL}/api/admin/${endpoint}?admin_address=${publicKey?.toBase58()}`, {
-                address
-            })
-
-            if (response.data.success) {
-                toast.success(`Пользователь ${action}ан`)
-                loadAllUsers()
-            } else {
-                toast.error(response.data.error || `Ошибка при ${action}ции пользователя`)
-            }
-        } catch (error: any) {
-            console.error(`Error ${action}ing user:`, error)
-            const errorMessage = error.response?.data?.error || `Ошибка при ${action}ции пользователя`
-            toast.error(errorMessage)
-        } finally {
-            setActionLoading(false)
-        }
-    }
-
-    const deleteUser = async (address: string) => {
-        if (!confirm(`Вы уверены, что хотите удалить пользователя ${address.slice(0, 8)}...${address.slice(-8)}? Это действие нельзя отменить!`)) {
-            return
-        }
-
-        try {
-            setActionLoading(true)
-            const response = await axios.delete(`${API_URL}/api/admin/delete/${address}?admin_address=${publicKey?.toBase58()}`)
-
-            if (response.data.success) {
-                toast.success('Пользователь удален')
-                loadAllUsers()
-                loadAdmins()
-            } else {
-                toast.error(response.data.error || 'Ошибка при удалении пользователя')
-            }
-        } catch (error: any) {
-            console.error('Error deleting user:', error)
-            const errorMessage = error.response?.data?.error || 'Ошибка при удалении пользователя'
-            toast.error(errorMessage)
-        } finally {
-            setActionLoading(false)
-        }
-    }
-
-    const removeAdmin = async (address: string) => {
-        await changeUserRole(address, 'counterparty')
-    }
-
-    const updateSystemSetting = async () => {
-        if (!newSetting.key.trim() || !newSetting.value.trim()) {
-            toast.error('Заполните ключ и значение настройки')
-            return
-        }
-
-        try {
-            setActionLoading(true)
-            const response = await axios.post(`${API_URL}/api/system/settings?admin_address=${publicKey?.toBase58()}`, newSetting)
-
-            if (response.data.success) {
-                toast.success('Настройка обновлена')
-                setNewSetting({ key: '', value: '', description: '' })
-                loadSystemSettings()
-            } else {
-                toast.error(response.data.error || 'Ошибка при обновлении настройки')
-            }
-        } catch (error: any) {
-            console.error('Error updating setting:', error)
-            const errorMessage = error.response?.data?.error || 'Ошибка при обновлении настройки'
-            toast.error(errorMessage)
-        } finally {
-            setActionLoading(false)
-        }
-    }
+    //	TODO: new func to change fee rate
 
     if (checkingAdmin) {
         return <div className="card">Проверка прав доступа...</div>

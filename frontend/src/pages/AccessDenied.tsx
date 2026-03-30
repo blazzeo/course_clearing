@@ -1,30 +1,38 @@
 import { useWallet } from '@solana/wallet-adapter-react'
 import { Link } from 'react-router-dom'
 import './AccessDenied.css'
+import { UserType } from '../interfaces'
 
 interface AccessDeniedProps {
-    requiredRole?: string
+    requiredRoles?: UserType[]
     resource?: string
 }
 
-export default function AccessDenied({ requiredRole, resource }: AccessDeniedProps) {
+function UserTypeToString(ut: UserType): string {
+    switch (ut) {
+        case UserType.Guest: return 'Гость'
+        case UserType.Counterparty: return 'Контрагент'
+        case UserType.Administator: return 'Администратор'
+        default: return 'Неизвестно'
+    }
+}
+
+export default function AccessDenied({ requiredRoles, resource }: AccessDeniedProps) {
     const { publicKey } = useWallet()
 
-    const getRoleDisplayName = (role: string) => {
-        switch (role) {
-            case 'guest': return 'Гость'
-            case 'counterparty': return 'Контрагент'
-            case 'auditor': return 'Аудитор'
-            case 'administrator': return 'Администратор'
-            default: return role
-            // default: return 'Неизвестно'
-        }
+    function getRoleDisplayName(roles: UserType[]): string {
+        const names = roles.map(UserTypeToString);
+
+        if (names.length === 0) return "";
+        if (names.length === 1) return names[0];
+        if (names.length === 2) return `${names[0]} или ${names[1]}`;
+
+        return `${names.slice(0, -1).join(", ")} или ${names[names.length - 1]}`;
     }
 
     const getResourceDisplayName = (resource: string) => {
         switch (resource) {
             case '/admin': return 'Админ-панель'
-            case '/auditor': return 'Аудитор-панель'
             case '/positions': return 'Мои позиции'
             case '/positions/create': return 'Создание позиции'
             case '/bills': return 'Мои счета'
@@ -42,10 +50,10 @@ export default function AccessDenied({ requiredRole, resource }: AccessDeniedPro
                 <h1>Доступ запрещён</h1>
 
                 <p className="access-text">
-                    {requiredRole && resource ? (
+                    {requiredRoles && resource ? (
                         <>
                             Для доступа к <strong>{getResourceDisplayName(resource)}</strong> требуется роль{' '}
-                            <strong>{getRoleDisplayName(requiredRole)}</strong>.
+                            <strong>{getRoleDisplayName(requiredRoles)}</strong>.
                             {!publicKey && (
                                 <>
                                     <br /><br />

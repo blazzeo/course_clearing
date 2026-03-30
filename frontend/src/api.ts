@@ -4,8 +4,7 @@ import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import { sha256 } from 'js-sha256';
-import { toast } from 'react-toastify';
-import { Obligation, ObligationStatus } from './pages/Positions';
+import { Obligation, ObligationStatus, Participant, UserType } from './interfaces';
 
 export function getProgram(provider: AnchorProvider): Program<ClearingSolana> {
     return new Program<ClearingSolana>(
@@ -44,8 +43,21 @@ export function getParticipantPda(
 export async function getParticipant(
     program: Program<ClearingSolana>,
     pda: PublicKey
-) {
-    return await program.account.participant.fetchNullable(pda);
+): Promise<Participant | null> {
+    const result = await program.account.participant.fetchNullable(pda);
+
+    if (result == null)
+        return null
+
+    return {
+        authority: result.authority,
+        userType: parseUserType(result.userType),
+        registrationTimestamp: result.registrationTimestamp.toNumber(),
+        updateTimestamp: result.updateTimestamp.toNumber(),
+        lastSessionId: result.lastSessionId.toNumber(),
+        name: result.name,
+        bump: result.bump
+    };
 }
 
 export async function initEscrow(program: Program<ClearingSolana>) {
@@ -320,7 +332,7 @@ export async function getClearingState(program: Program<ClearingSolana>) {
 export async function getUserRole(
     program: Program<ClearingSolana>,
     publicKey: PublicKey
-): Promise<string> {
+): Promise<UserType> {
     try {
         const participantPda = getParticipantPda(program.programId, publicKey)
 
@@ -328,13 +340,10 @@ export async function getUserRole(
 
         const ut = participant.userType
 
-        if (ut?.participant !== undefined) return 'counterparty'
-        if (ut?.admin !== undefined) return 'administrator'
-        if (ut?.officer !== undefined) return 'auditor'
-
-        return 'guest'
-    } catch {
-        return 'guest'
+        return parseUserType(ut)
+    } catch (e) {
+        console.error(e)
+        return UserType.Guest
     }
 }
 
@@ -375,6 +384,40 @@ export async function getObligations(
     program: Program<ClearingSolana>,
 ) {
     return await program.account.obligation.all()
+}
+
+export async function getAllParticipants(
+    program: Program<ClearingSolana>,
+): Promise<Participant[]> {
+    const accounts = await program.account.participant.all();
+
+    return accounts.map(({ account }) => ({
+        authority: account.authority,
+        userType: parseUserType(account.userType),
+        registrationTimestamp: safeBN(account.registrationTimestamp),
+        updateTimestamp: safeBN(account.updateTimestamp),
+        lastSessionId: safeBN(account.lastSessionId),
+        name: account.name,
+        bump: account.bump,
+    }));
+}
+
+function parseUserType(userType: any): UserType {
+    if (userType?.admin !== undefined) return UserType.Administator;
+    if (userType?.participant !== undefined) return UserType.Counterparty;
+    return UserType.Guest;
+}
+
+function safeBN(value: any): number {
+    if (!value) return 0;
+
+    const num = value.toNumber();
+
+    if (num > Number.MAX_SAFE_INTEGER) {
+        throw new Error("BN overflow: value too large");
+    }
+
+    return num;
 }
 
 export async function getObligationsByParticipant(

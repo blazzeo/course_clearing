@@ -1,23 +1,22 @@
 import { ReactNode } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import AccessDenied from '../pages/AccessDenied'
+import { UserType } from '../interfaces'
 
 interface ProtectedRouteProps {
     children: ReactNode
-    requiredRole?: string
-    requiredRoles?: string[]
+    requiredRoles?: UserType[]
     resource?: string
     requireWallet?: boolean
-    userRole?: string
+    userRole?: UserType
 }
 
 export default function ProtectedRoute({
     children,
-    requiredRole,
     requiredRoles,
     resource,
     requireWallet = false,
-    userRole = 'guest'
+    userRole = UserType.Guest
 }: ProtectedRouteProps) {
     const { publicKey } = useWallet()
 
@@ -28,27 +27,19 @@ export default function ProtectedRoute({
 
     // Если кошелек не подключен, показываем гостевой контент
     if (!publicKey) {
-        if (requiredRole || requiredRoles) {
+        if (requiredRoles) {
             return <AccessDenied
-                requiredRole={requiredRole}
+                requiredRoles={requiredRoles}
                 resource={resource}
             />
         }
         return <>{children}</>
     }
 
-    // Проверяем доступ по конкретной роли
-    if (requiredRole && userRole !== requiredRole) {
-        return <AccessDenied
-            requiredRole={requiredRole}
-            resource={resource}
-        />
-    }
-
     // Проверяем доступ по списку ролей
     if (requiredRoles && !requiredRoles.includes(userRole)) {
         return <AccessDenied
-            requiredRole={requiredRoles.join(' или ')}
+            requiredRoles={requiredRoles}
             resource={resource}
         />
     }
