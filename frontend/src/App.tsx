@@ -49,7 +49,7 @@ function App() {
     return (
         <>
             <ToastContainer position="top-right" autoClose={3000} />
-            <Layout userRole={userRole} onRoleUpdate={setUserRole}>
+            <Layout userType={userRole} onRoleUpdate={setUserRole}>
                 <Routes>
                     {/* Публичные маршруты */}
                     <Route path="/" element={<Home />} />

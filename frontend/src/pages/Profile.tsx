@@ -2,16 +2,8 @@ import { useEffect, useState } from 'react'
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { getBalance, getParticipant, getParticipantPda, registerParticipant, useProgram } from '../api'
-import { Participant, UserType } from '../interfaces';
-
-export function UserTypeToString(userType: UserType): String {
-    switch (userType) {
-        case UserType.Counterparty: return 'Контрагент';
-        case UserType.Administator: return 'Администратор';
-        case UserType.Guest: return 'Гость';
-        default: return 'Неизвестно'
-    }
-}
+import { Participant, UserType, UserTypeToString } from '../interfaces';
+import { PublicKey } from '@solana/web3.js';
 
 export default function Profile() {
     const anchorWallet = useAnchorWallet()
@@ -20,6 +12,7 @@ export default function Profile() {
     const publicKey = anchorWallet?.publicKey ?? null
 
     const [profile, setProfile] = useState<Participant | null>(null)
+    const [balance, setBalance] = useState<number | null>(null)
     const [loading, setLoading] = useState(true)
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [blockchainInitializing, setBlockchainInitializing] = useState(false)
@@ -38,6 +31,7 @@ export default function Profile() {
 
             // Баланс берем как SOL на адресе (lamports -> SOL).
             const balanceLamports = await getBalance(connection, publicKey)
+            setBalance(balanceLamports)
 
             // Participant PDA
             const participantPda = getParticipantPda(program.programId, publicKey);
@@ -47,13 +41,14 @@ export default function Profile() {
             // Если аккаунта участника нет — показываем "гостя".
             if (!participant) {
                 setProfile({
-                    authority: publicKey.toBase58(),
+                    pda: new PublicKey(""),
+                    authority: publicKey,
                     name: '',
-                    user_type: 'guest',
-                    is_active: false,
-                    balance: balanceLamports,
-                    created_at: '',
-                    updated_at: '',
+                    userType: UserType.Guest,
+                    registrationTimestamp: 0,
+                    updateTimestamp: 0,
+                    lastSessionId: 0,
+                    bump: 0
                 })
                 return
             }
@@ -152,7 +147,7 @@ export default function Profile() {
                             Баланс
                         </div>
                         <div className="profile_balance-value">
-                            {(profile.balance / 1e9).toFixed(4)} SOL
+                            {balance ? (balance / 1e9).toFixed(4) : 0} SOL
                         </div>
                     </div>
                 </div>

@@ -1,20 +1,11 @@
 import { useWallet } from '@solana/wallet-adapter-react'
 import { Link } from 'react-router-dom'
 import './AccessDenied.css'
-import { UserType } from '../interfaces'
+import { UserType, UserTypeToString } from '../interfaces'
 
 interface AccessDeniedProps {
     requiredRoles?: UserType[]
     resource?: string
-}
-
-function UserTypeToString(ut: UserType): string {
-    switch (ut) {
-        case UserType.Guest: return 'Гость'
-        case UserType.Counterparty: return 'Контрагент'
-        case UserType.Administator: return 'Администратор'
-        default: return 'Неизвестно'
-    }
 }
 
 export default function AccessDenied({ requiredRoles, resource }: AccessDeniedProps) {

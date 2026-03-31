@@ -45,3 +45,12 @@ export interface SystemInfo {
     total_obligations: number
     fee_rate_bps: string
 }
+
+export function UserTypeToString(userType: UserType): String {
+    switch (userType) {
+        case UserType.Counterparty: return 'Контрагент';
+        case UserType.Administator: return 'Администратор';
+        case UserType.Guest: return 'Гость';
+        default: return 'Неизвестно'
+    }
+}

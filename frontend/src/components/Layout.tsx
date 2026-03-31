@@ -3,15 +3,15 @@ import { Link, useLocation } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { getUserRole, useProgram } from '../api'
-import { UserType } from '../interfaces'
+import { UserType, UserTypeToString } from '../interfaces'
 
 interface LayoutProps {
     children: ReactNode
-    userRole: UserType
+    userType: UserType
     onRoleUpdate: (role: UserType) => void
 }
 
-export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps) {
+export default function Layout({ children, userType, onRoleUpdate }: LayoutProps) {
     const { publicKey } = useWallet();
     const location = useLocation();
     const program = useProgram();
@@ -25,8 +25,8 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
             }
 
             try {
-                const user_type = await getUserRole(program, publicKey);
-                onRoleUpdate(user_type)
+                const userType = await getUserRole(program, publicKey);
+                onRoleUpdate(userType)
             } catch (error) {
                 console.error('Error updating user role:', error);
                 // При ошибке устанавливаем гостя
@@ -67,7 +67,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                         )}
 
                         {/* Ссылки для контрагентов */}
-                        {userRole === UserType.Counterparty && (
+                        {userType === UserType.Counterparty && (
                             <>
                                 <Link
                                     to="/positions"
@@ -103,7 +103,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                         )}
 
                         {/* Ссылки для администраторов */}
-                        {userRole === UserType.Administator && (
+                        {userType === UserType.Administator && (
                             <>
                                 <Link
                                     to="/admin"
@@ -128,6 +128,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                             </>
                         )}
                     </div>
+
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                             {
@@ -152,9 +153,7 @@ export default function Layout({ children, userRole, onRoleUpdate }: LayoutProps
                                     </span>
                             }
                             <span style={{ fontSize: '12px', color: '#666' }}>
-                                Роль: {userRole === UserType.Guest ? 'Гость' :
-                                    userRole === UserType.Counterparty ? 'Контрагент' :
-                                        userRole === UserType.Administator ? 'Администратор' : 'Неизвестно'}
+                                Роль: {UserTypeToString(userType)}
                             </span>
                         </div>
                         <WalletMultiButton />
