@@ -1,6 +1,5 @@
-use anchor_lang::prelude::Pubkey;
-
-use crate::models::{ApiResponse, RawSettlement};
+use crate::models::RawSettlement;
+use solana_sdk::pubkey::Pubkey;
 
 /// Основная функция неттинга.
 ///
@@ -12,10 +11,10 @@ use crate::models::{ApiResponse, RawSettlement};
 pub fn netting_clearing(
     participants: &[Pubkey],
     amounts: &[i64],
-) -> ApiResponse<Vec<RawSettlement>> {
+) -> Result<Vec<RawSettlement>, Box<dyn std::error::Error>> {
     // валидация входа
     if participants.len() != amounts.len() {
-        return ApiResponse::error("participants and amounts length mismatch".into());
+        return Err("participants and amounts length mismatch".into());
     }
 
     // соберём пары адрес/amount
@@ -32,7 +31,7 @@ pub fn netting_clearing(
     let total: i128 = entries.iter().map(|(_, a)| *a as i128).sum();
     if total != 0 {
         // если сумма != 0 — пока возвращаем ошибку, можно изменить поведение (например масштабировать или оставить остаток)
-        return ApiResponse::error(format!("positions not balanced, total sum = {}", total));
+        return Err(format!("positions not balanced, total sum = {}", total).into());
     }
 
     // создадим списки кредиторов и должников
@@ -67,8 +66,8 @@ pub fn netting_clearing(
 
         // добавляем транзакцию: debtor -> creditor
         settlements.push(RawSettlement {
-            from_address: deb_addr.to_string(),
-            to_address: cred_addr.to_string(),
+            from_address: *deb_addr,
+            to_address: *cred_addr,
             amount: transfer,
         });
 
@@ -85,5 +84,8 @@ pub fn netting_clearing(
         }
     }
 
-    ApiResponse::success(settlements)
+    creditors.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    debtors.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    Ok(settlements)
 }

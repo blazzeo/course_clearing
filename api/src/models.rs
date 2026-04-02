@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
 use sqlx::FromRow;
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromRow, PartialEq)]
 pub struct RawSettlement {
-    pub from_address: String,
-    pub to_address: String,
+    pub from_address: Pubkey,
+    pub to_address: Pubkey,
     pub amount: i64,
 }
+
 #[derive(Deserialize)]
 pub struct AdminSignedRequest {
     pub message: String,

@@ -1,5 +1,4 @@
 mod auth_service;
-mod blockchain;
 mod cron_worker;
 mod handlers;
 mod ledger_engine;
@@ -7,8 +6,11 @@ mod models;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
+use cron_worker::{CronWorker, WorkerState};
 use dotenv::dotenv;
+use solana_client::nonblocking::rpc_client::RpcClient;
 use std::{env, sync::Arc};
+use tokio::sync::RwLock;
 
 fn parse_env() -> (String, u16, String) {
     let solana_rpc_url = env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL env missing");
@@ -30,10 +32,14 @@ async fn main() -> std::io::Result<()> {
 
     let (solana_rpc_url, port, admin_pubkey) = parse_env();
 
-    let blockchain_client = blockchain::BlockchainClient::new(&solana_rpc_url)
-        .expect("Failed to create blockchain client");
+    let rpc_client = RpcClient::new(solana_rpc_url.clone());
 
-    let blockchain_client_data = Arc::new(blockchain_client);
+    let worker_state = Arc::new(RwLock::new(
+        WorkerState::new(rpc_client)
+            .await
+            .expect("Can't init worker state"),
+    ));
+    let cron_worker = Arc::new(CronWorker::start(worker_state.clone()));
 
     tracing::info!("🚀 Starting API server on port {}", port);
     tracing::info!("🤖 Solana RPC URL: {}", solana_rpc_url);
@@ -48,8 +54,9 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(solana_rpc_url.clone()))
-            .app_data(web::Data::new(blockchain_client_data.clone()))
+            .app_data(web::Data::new(worker_state.clone()))
             .app_data(web::Data::new(admin_pubkey.clone()))
+            .app_data(web::Data::new(cron_worker.clone()))
             .route("/health", web::get().to(handlers::health))
             .service(web::scope("/api").route(
                 "/clearing/run",
