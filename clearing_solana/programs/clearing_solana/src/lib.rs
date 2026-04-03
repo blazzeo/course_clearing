@@ -15,6 +15,7 @@ pub mod clearing_solana {
 
         state.authority = ctx.accounts.authority.key();
         state.bump = ctx.bumps.state;
+        state.session_interval_time = clock::SECONDS_PER_DAY * 60 * 60 * 24 * 7;
         state.total_participants = 0;
         state.total_sessions = 0;
         state.total_obligations = 0;
@@ -1036,6 +1037,7 @@ pub struct ClearingState {
     pub total_sessions: u64,
     pub total_participants: u64,
     pub total_obligations: u64,
+    pub session_interval_time: u64,
     pub fee_rate_bps: u64,
     pub update_timestamp: i64,
     pub bump: u8,
@@ -1047,6 +1049,7 @@ impl ClearingState {
         8 + // total_sessions
         8 + // total_participants
         8 + // total_obligations
+        8 + // session_interval_time
         8 + // fee_rate_bps
         8 + // update_timestamp
         1; // bump

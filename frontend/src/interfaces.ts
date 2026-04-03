@@ -23,9 +23,9 @@ export interface Obligation {
 }
 
 export enum UserType {
-    Guest,
-    Administator,
-    Counterparty
+    Guest = 'guest',
+    Administator = 'admin',
+    Counterparty = 'counterparty'
 }
 
 export interface Participant {

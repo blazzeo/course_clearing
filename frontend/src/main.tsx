@@ -13,7 +13,7 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 export const RPC_URL: string = import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
-export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

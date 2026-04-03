@@ -35,13 +35,12 @@ export default function Profile() {
 
             // Participant PDA
             const participantPda = getParticipantPda(program.programId, publicKey);
-
             const participant = await getParticipant(program, participantPda)
 
             // Если аккаунта участника нет — показываем "гостя".
             if (!participant) {
                 setProfile({
-                    pda: new PublicKey(""),
+                    pda: publicKey,
                     authority: publicKey,
                     name: '',
                     userType: UserType.Guest,

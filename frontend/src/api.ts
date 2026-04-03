@@ -338,9 +338,7 @@ export async function getUserRole(
 
         const participant = await program.account.participant.fetch(participantPda)
 
-        const ut = participant.userType
-
-        return parseUserType(ut)
+        return parseUserType(participant.userType)
     } catch (e) {
         console.error(e)
         return UserType.Guest

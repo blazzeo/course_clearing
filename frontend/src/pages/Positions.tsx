@@ -4,6 +4,7 @@ import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { cancelObligation, confirmObligation, getObligationsByParticipant, useProgram } from '../api'
 import { Obligation, ObligationStatus } from '../interfaces'
+import { ClipLoader } from "react-spinners";
 
 export function MapObligationStatus(status: ObligationStatus) {
     switch (status) {
@@ -189,7 +190,10 @@ export default function Positions() {
                 </div>
 
                 {loading ? (
-                    <p>Загрузка...</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>
+                        <ClipLoader size={56} speedMultiplier={0.7} />
+                        <p>Загрузка...</p>
+                    </div>
                 ) : positions.length === 0 ? (
                     <p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
                         Позиции не найдены

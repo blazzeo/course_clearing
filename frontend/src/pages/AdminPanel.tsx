@@ -1,10 +1,12 @@
 import axios from 'axios'
+import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
 import { getAllParticipants, getClearingState, getUserRole, useProgram } from '../api'
 import { Participant, UserType, UserTypeToString } from '../interfaces'
+import { ClipLoader } from 'react-spinners'
 
 interface SystemSetting {
     id: number,
@@ -26,7 +28,7 @@ export default function AdminPanel() {
     const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'system'>('users')
     const [newSetting, setNewSetting] = useState({ key: '', value: '', description: '' })
 
-    const { publicKey } = useWallet()
+    const { publicKey, signMessage } = useWallet()
     const program = useProgram()
 
     useEffect(() => {
@@ -40,8 +42,10 @@ export default function AdminPanel() {
         }
 
         try {
-            if (await getUserRole(program, publicKey) == UserType.Administator)
-                setIsAdmin(isAdmin)
+            let role = await getUserRole(program, publicKey);
+            console.log(role)
+            if (role == UserType.Administator)
+                setIsAdmin(true)
         } catch (error) {
             console.error('Error checking admin status:', error)
             toast.error('Ошибка при проверке прав администратора')
@@ -52,14 +56,39 @@ export default function AdminPanel() {
 
     //	TODO: fix clearing response logic
     const executeClearingHandler = async () => {
-        if (!publicKey || !program) {
+        if (!publicKey || !program || !signMessage) {
             toast.error("Кошелек не найден")
             return
         }
 
         try {
-            await axios.post(`${API_URL}/api/clearing/run`)
+            const message = "clear";
+            const encodedMessage = new TextEncoder().encode(message);
 
+            const signature = await signMessage(encodedMessage);
+
+            console.log("Signature:", signature);
+
+            const signatureBase64 = btoa(
+                String.fromCharCode(...signature)
+            );
+
+            console.log({ message: message, signature: signatureBase64 });
+
+            let res = await axios.post(
+                `${API_URL}/api/clearing/run`,
+                {
+                    message,
+                    signature: signatureBase64,
+                },
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                }
+            );
+
+            console.log(res)
         } catch (error) {
             console.error('Error executing clearing:', error)
             toast.error('Ошибка при проведении операции')
@@ -79,6 +108,7 @@ export default function AdminPanel() {
 
         try {
             const participants = await getAllParticipants(program)
+            console.log("participants: ", participants)
             setAllUsers(participants)
         } catch (error) {
             console.error('Error loading users:', error)
@@ -179,7 +209,10 @@ export default function AdminPanel() {
                     <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
                         <h3 style={{ marginBottom: '16px', padding: '20px 20px 0 20px' }}>Все пользователи системы</h3>
                         {loading ? (
-                            <div style={{ padding: '20px' }}>Загрузка...</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>
+                                <ClipLoader size={56} speedMultiplier={0.7} />
+                                <p>Загрузка...</p>
+                            </div>
                         ) : allUsers.length === 0 ? (
                             <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
                                 Пользователей пока нет
@@ -197,7 +230,7 @@ export default function AdminPanel() {
                                         {allUsers.map((user) => (
                                             <tr key={user.authority.toBase58()} style={{ borderBottom: '1px solid #eee' }}>
                                                 <td style={{ padding: '12px', fontFamily: 'monospace', fontSize: '14px' }}>
-                                                    {user.authority.toBase58().slice(0, 8)}...{user.authority.toBase58().slice(-8)}
+                                                    <Link to={`/participant/${user.authority.toBase58()}`}>user.authority.toBase58()</Link>
                                                 </td>
                                                 <td style={{ padding: '12px' }}>
                                                     {UserTypeToString(user.userType)}
