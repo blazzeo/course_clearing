@@ -16,16 +16,16 @@ export const RPC_URL: string = import.meta.env.VITE_SOLANA_RPC_URL || 'https://a
 export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-        <ConnectionProvider endpoint={RPC_URL}>
-            <WalletProvider wallets={[]} autoConnect>
-                <WalletModalProvider>
-                    <BrowserRouter>
-                        <App />
-                    </BrowserRouter>
-                </WalletModalProvider>
-            </WalletProvider>
-        </ConnectionProvider>
-    </React.StrictMode>,
+	<React.StrictMode>
+		<ConnectionProvider endpoint={RPC_URL}>
+			<WalletProvider wallets={[]} autoConnect>
+				<WalletModalProvider>
+					<BrowserRouter>
+						<App />
+					</BrowserRouter>
+				</WalletModalProvider>
+			</WalletProvider>
+		</ConnectionProvider>
+	</React.StrictMode>,
 )
 
