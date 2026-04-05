@@ -11,8 +11,8 @@ const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
 const program = new Program(
-    idl as ClearingSolana,
-    provider
+	idl as ClearingSolana,
+	provider
 );
 
 const privateKey = process.env.ADMIN_PRIVATE_KEY;
@@ -20,58 +20,61 @@ const privateKey = process.env.ADMIN_PRIVATE_KEY;
 const adminKeypair = Keypair.fromSecretKey(bs58.decode(privateKey));
 
 async function main() {
-    const authority = adminKeypair.publicKey;
+	const authority = adminKeypair.publicKey;
 
-    console.log("Authority:", authority.toBase58());
+	console.log("Authority:", authority.toBase58());
 
-    const connection = provider.connection;
+	const connection = provider.connection;
 
-    const signature = await connection.requestAirdrop(
-        authority,
-        100 * anchor.web3.LAMPORTS_PER_SOL
-    );
+	const signature = await connection.requestAirdrop(
+		authority,
+		100 * anchor.web3.LAMPORTS_PER_SOL
+	);
 
-    await connection.confirmTransaction(signature);
+	await connection.confirmTransaction(signature);
 
-    console.log("Airdropped 100 SOL");
+	console.log("Airdropped 100 SOL");
 
-    await program.methods
-        .initClearingState()
-        .accounts({
-            authority,
-        })
-        .signers([adminKeypair])
-        .rpc();
+	const balance = await connection.getBalance(authority)
+	console.log("Balance: ", balance);
 
-    console.log("State initialized");
+	await program.methods
+		.initClearingState()
+		.accounts({
+			authority,
+		})
+		.signers([adminKeypair])
+		.rpc();
 
-    await program.methods
-        .initAdmin()
-        .accounts({ authority })
-        .signers([adminKeypair])
-        .rpc();
+	console.log("State initialized");
 
-    console.log(`Admin created: ${authority}`);
+	await program.methods
+		.initAdmin()
+		.accounts({ authority })
+		.signers([adminKeypair])
+		.rpc();
 
-    await program.methods
-        .initEscrow()
-        .accounts({
-            authority,
-        })
-        .signers([adminKeypair])
-        .rpc();
+	console.log(`Admin created: ${authority}`);
 
-    console.log("Escrow initialized");
+	await program.methods
+		.initEscrow()
+		.accounts({
+			authority,
+		})
+		.signers([adminKeypair])
+		.rpc();
 
-    await program.methods
-        .createPoolManager()
-        .accounts({
-            authority,
-        })
-        .signers([adminKeypair])
-        .rpc();
+	console.log("Escrow initialized");
 
-    console.log("Pool manager initialized");
+	await program.methods
+		.createPoolManager()
+		.accounts({
+			authority,
+		})
+		.signers([adminKeypair])
+		.rpc();
+
+	console.log("Pool manager initialized");
 }
 
 main().catch(console.error);

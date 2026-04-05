@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
+declare_id!("BNX6hQwS6qsF7o91ve3mEjLzQU7W276yvZUwgMfscn5t");
 
 #[program]
 pub mod clearing_solana {
@@ -15,7 +15,7 @@ pub mod clearing_solana {
 
         state.authority = ctx.accounts.authority.key();
         state.bump = ctx.bumps.state;
-        state.session_interval_time = clock::SECONDS_PER_DAY * 60 * 60 * 24 * 7;
+        state.session_interval_time = clock::SECONDS_PER_DAY * 7;
         state.total_participants = 0;
         state.total_sessions = 0;
         state.total_obligations = 0;
