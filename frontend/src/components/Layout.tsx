@@ -70,21 +70,21 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                         {userType === UserType.Counterparty && (
                             <>
                                 <Link
-                                    to="/positions"
+                                    to="/obligations"
                                     style={{
                                         textDecoration: 'none',
-                                        color: location.pathname === '/positions' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/positions' ? '600' : '400'
+                                        color: location.pathname === '/obligations' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/obligations' ? '600' : '400'
                                     }}
                                 >
                                     Мои позиции
                                 </Link>
                                 <Link
-                                    to="/positions/create"
+                                    to="/obligations/create"
                                     style={{
                                         textDecoration: 'none',
-                                        color: location.pathname === '/positions/create' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/positions/create' ? '600' : '400'
+                                        color: location.pathname === '/obligations/create' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/obligations/create' ? '600' : '400'
                                     }}
                                 >
                                     Создать позицию

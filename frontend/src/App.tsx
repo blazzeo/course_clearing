@@ -1,15 +1,15 @@
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import Home from './pages/Home'
-import Positions from './pages/Positions'
-import CreatePosition from './pages/CreatePosition'
+import ObligationsPage from './pages/ObligationsPage'
+import CreateObligation from './pages/CreateObligation'
 import Bills from './pages/Bills'
 import AdminPanel from './pages/AdminPanel'
 import Profile from './pages/Profile'
 import Funds from './pages/Funds'
 import AccessDenied from './pages/AccessDenied'
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import "react-toastify/dist/ReactToastify.css";
 import { ToastContainer } from "react-toastify";
 import { Route, Routes } from 'react-router-dom'
@@ -18,11 +18,15 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { getParticipantPda, getUserRole, useProgram } from './api'
 import { UserType } from './interfaces'
+import { AppProviders } from './providers/BlockchainProviders'
+import { useUserRole } from './providers/UserTypeProvider'
+import { ClipLoader } from 'react-spinners'
+import ParticipantPage from './pages/Participant'
 
 function App() {
     const { publicKey } = useWallet();
     const program = useProgram();
-    const [userRole, setUserRole] = useState<UserType>(UserType.Guest);
+    const { userRole, setUserRole } = useUserRole()
 
     useEffect(() => {
         authenticateUser()
@@ -47,37 +51,42 @@ function App() {
     }
 
     return (
-        <>
+        <AppProviders program={program!} publicKey={publicKey} isAdmin={userRole === UserType.Administator}>
             <ToastContainer position="top-right" autoClose={3000} />
             <Layout userType={userRole} onRoleUpdate={setUserRole}>
                 <Routes>
                     {/* Публичные маршруты */}
                     <Route path="/" element={<Home />} />
                     <Route path="/profile" element={
-                        <ProtectedRoute requireWallet={true} resource="/profile" userRole={userRole}>
+                        <ProtectedRoute requireWallet={true} resource="/profile">
                             <Profile />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/participant/:address" element={
+                        <ProtectedRoute requireWallet={true} resource="/participant">
+                            <ParticipantPage />
                         </ProtectedRoute>
                     } />
 
                     {/* Защищенные маршруты для контрагентов */}
-                    <Route path="/positions" element={
+                    <Route path="/obligations" element={
                         <ProtectedRoute
                             requiredRoles={[UserType.Counterparty]}
-                            resource="/positions"
+                            resource="/obligations"
                             requireWallet={true}
                             userRole={userRole}
                         >
-                            <Positions />
+                            <ObligationsPage />
                         </ProtectedRoute>
                     } />
-                    <Route path="/positions/create" element={
+                    <Route path="/obligations/create" element={
                         <ProtectedRoute
                             requiredRoles={[UserType.Counterparty]}
-                            resource="/positions/create"
+                            resource="/obligations/create"
                             requireWallet={true}
                             userRole={userRole}
                         >
-                            <CreatePosition />
+                            <CreateObligation />
                         </ProtectedRoute>
                     } />
                     <Route path="/bills" element={
@@ -117,7 +126,7 @@ function App() {
                     <Route path="*" element={<AccessDenied />} />
                 </Routes>
             </Layout>
-        </>
+        </AppProviders>
     )
 }
 

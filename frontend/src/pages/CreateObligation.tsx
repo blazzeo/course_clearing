@@ -5,7 +5,7 @@ import { toast } from 'react-toastify'
 import { getPool, getPoolPda, registerObligation, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
 
-export default function CreatePosition() {
+export default function CreateObligation() {
     const { publicKey } = useWallet()
     const program = useProgram()
     const navigate = useNavigate()
@@ -77,9 +77,9 @@ export default function CreatePosition() {
             });
 
             toast.success('Позиция создана успешно!')
-            navigate('/positions')
+            navigate('/obligations')
         } catch (error: any) {
-            console.error('Error creating position:', error)
+            console.error('Error creating obligation:', error)
             toast.error(error.response?.data?.error || 'Ошибка при создании позиции')
         } finally {
             setLoading(false)

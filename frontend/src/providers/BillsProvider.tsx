@@ -1,67 +1,69 @@
-// providers/BillsProvider.tsx
-import { ReactNode, useCallback, useEffect } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BillsContext } from "../contexts/blockchain/BillsContext";
-import { useBlockchain } from "../contexts/blockchain/BlockchainContext";
-import { getBillsByParticipant } from "../api";
+// providers/SimplePositionsProvider.tsx
+import { createContext, useContext, useState, ReactNode } from "react";
 import { Bill } from "../interfaces";
+import { getBillsByParticipant } from "../api";
+import { Program } from "@coral-xyz/anchor";
+import { ClearingSolana } from "../clearing_solana";
+import { PublicKey } from "@solana/web3.js";
 
-interface Props {
-	children: ReactNode;
+interface BillsContextType {
+    bills: Bill[];
+    isLoading: boolean;
+    fetchBills: () => Promise<void>;
+    refreshBills: () => void;
 }
 
-const QUERY_KEY = 'bills';
+// Создаем контекст
+const BillsContext = createContext<BillsContextType | null>(null);
 
-export const BillsProvider = ({ children }: Props) => {
-	const { publicKey } = useWallet();
-	const { program } = useBlockchain();
-	const queryClient = useQueryClient();
+interface BillsProviderProps {
+    children: ReactNode;
+    program: Program<ClearingSolana> | null;
+    publicKey: PublicKey | null;
+}
 
-	const {
-		data: bills = [],
-		isLoading: loading,
-		error,
-		refetch,
-	} = useQuery<Bill[]>({
-		queryKey: [QUERY_KEY, publicKey?.toBase58()],
-		queryFn: async () => {
-			if (!publicKey || !program) return [];
-			return getBillsByParticipant(program, publicKey);
-		},
-		enabled: !!publicKey && !!program,
-		staleTime: 3 * 60 * 1000, // 3 минуты
-		gcTime: 10 * 60 * 1000,
-	});
+// Провайдер
+export function BillsProvider({ children, program, publicKey }: BillsProviderProps) {
+    const [bills, setBills] = useState<Bill[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
 
-	const reload = useCallback(async () => {
-		await queryClient.invalidateQueries({
-			queryKey: [QUERY_KEY, publicKey?.toBase58()]
-		});
-		await refetch();
-	}, [queryClient, publicKey, refetch]);
+    // Метод - получить данные
+    const fetchBills = async () => {
+        if (!program || !publicKey) return
 
-	const clearCache = useCallback(() => {
-		queryClient.removeQueries({
-			queryKey: [QUERY_KEY, publicKey?.toBase58()]
-		});
-	}, [queryClient, publicKey]);
+        setIsLoading(true);
+        try {
+            const data = await getBillsByParticipant(program, publicKey)
+            setBills(data);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
-	useEffect(() => {
-		if (!publicKey) {
-			clearCache();
-		}
-	}, [publicKey, clearCache]);
+    // Метод - обновить данные
+    const refreshBills = async () => {
+        await fetchBills()
+    };
 
-	return (
-		<BillsContext.Provider value={{
-			bills,
-			loading,
-			error,
-			reload,
-			clearCache,
-		}}>
-			{children}
-		</BillsContext.Provider>
-	);
-};
+    return (
+        <BillsContext.Provider value={{
+            bills,
+            isLoading,
+            fetchBills,
+            refreshBills,
+        }}>
+            {children}
+        </BillsContext.Provider>
+    );
+}
+
+// Хук для использования
+export function useBills() {
+    const context = useContext(BillsContext);
+    if (!context) {
+        throw new Error("useBills must be used inside BillsProvider");
+    }
+    return context;
+}

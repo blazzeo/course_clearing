@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Participant } from '../interfaces'
+import { Participant, UserTypeToString } from '../interfaces'
 import { getParticipant, getParticipantPda, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
 
@@ -49,14 +49,27 @@ export default function ParticipantPage() {
     return (
         <div>
             <div className="card">
-                <h1 style={{ marginBottom: '24px', color: '#333' }}>Информация об участнике</h1>
+                <div style={{ marginBottom: '24px', color: '#333', display: 'flex', justifyContent: 'space-between' }}>
+                    <h1>Информация об участнике</h1>
+                    <p style={{
+                        borderRadius: '8px',
+                        fontSize: '30px',
+                        color: '#667eea',
+                        fontWeight: 'bold'
+                    }}>
+                        {UserTypeToString(participant.userType)}
+                    </p>
+                </div>
 
                 <div style={{ marginBottom: '16px' }}>
-                    <label className="label">Адрес:</label>
+                    <label className="label">Адрес: </label>
                     <p style={{
                         padding: '12px',
                         background: '#f8f9fa',
+                        fontSize: '20px',
+                        fontWeight: 'bold',
                         borderRadius: '8px',
+                        color: '#667eea',
                         fontFamily: 'monospace',
                         wordBreak: 'break-all'
                     }}>
@@ -65,7 +78,21 @@ export default function ParticipantPage() {
                 </div>
 
                 <div style={{ marginBottom: '16px' }}>
-                    <label className="label">Зарегистрирован с:</label>
+                    <label className="label">Дата регистрации: </label>
+                    <p style={{
+                        padding: '12px',
+                        background: '#f8f9fa',
+                        borderRadius: '8px',
+                        color: '#667eea',
+                        fontWeight: 'bold'
+                    }}>
+                        {new Date(Number(participant.registrationTimestamp) * 1000).toLocaleString()}
+                    </p>
+                </div>
+
+
+                <div style={{ marginBottom: '16px' }}>
+                    <label className="label">Создано обязательств: </label>
                     <p style={{
                         padding: '12px',
                         background: '#f8f9fa',
@@ -74,7 +101,7 @@ export default function ParticipantPage() {
                         fontWeight: 'bold',
                         color: '#667eea'
                     }}>
-                        {participant.registrationTimestamp}
+                        {participant.totalObligations | 0}
                     </p>
                 </div>
 

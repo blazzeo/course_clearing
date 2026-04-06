@@ -81,6 +81,10 @@ pub mod clearing_solana {
 
         let participant = &mut ctx.accounts.participant;
         participant.update_timestamp = clock.unix_timestamp;
+        participant.total_obligations = participant
+            .total_obligations
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
 
         Ok(())
     }
@@ -308,6 +312,7 @@ pub mod clearing_solana {
         participant.registration_timestamp = clock.unix_timestamp;
         participant.update_timestamp = clock.unix_timestamp;
         participant.last_session_id = 0;
+        participant.total_obligations = 0;
         participant.name = name;
         participant.bump = ctx.bumps.new_participant;
 
@@ -403,41 +408,38 @@ pub mod clearing_solana {
     pub fn withdraw_fee(ctx: Context<WithdrawFee>, amount: u64) -> Result<()> {
         let clock = Clock::get()?;
 
-        {
-            let escrow = &mut ctx.accounts.escrow;
+        // 1. Проверки
+        let escrow = &ctx.accounts.escrow;
+        let rent_exemption = Rent::get()?.minimum_balance(escrow.to_account_info().data_len());
+        let current_lamports = escrow.to_account_info().lamports();
 
-            // Проверка что сумма не превышает баланс escrow
-            let escrow_balance = **escrow.to_account_info().lamports.borrow();
-            require!(
-                escrow_balance >= amount,
-                WithdrawFeeError::InsufficientBalance
-            );
-
-            // Проверка что не пытаемся вывести больше чем собрано
-            require!(
-                escrow.total_fees >= amount,
-                WithdrawFeeError::InsufficientFees
-            );
-        }
-
-        let transfer_instruction = transfer(
-            &ctx.accounts.escrow.key(),
-            &ctx.accounts.authority.key(),
-            amount,
+        // Проверяем, что после вывода аккаунт останется "живым" (выше порога аренды)
+        require!(
+            current_lamports >= amount + rent_exemption,
+            WithdrawFeeError::InsufficientBalance
         );
 
-        invoke(
-            &transfer_instruction,
-            &[
-                ctx.accounts.escrow.to_account_info(),
-                ctx.accounts.authority.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-        )?;
+        require!(
+            escrow.total_fees >= amount,
+            WithdrawFeeError::InsufficientFees
+        );
 
-        let escrow = &mut ctx.accounts.escrow;
+        // 2. Перевод средств (Простой способ для PDA в Anchor)
+        // Мы просто забираем лампорты у одного и отдаем другому
+        **ctx
+            .accounts
+            .escrow
+            .to_account_info()
+            .try_borrow_mut_lamports()? -= amount;
+        **ctx
+            .accounts
+            .authority
+            .to_account_info()
+            .try_borrow_mut_lamports()? += amount;
 
-        escrow
+        // 3. Обновление состояния (Важно: присвоить значение!)
+        let escrow_mut = &mut ctx.accounts.escrow;
+        escrow_mut.total_fees = escrow_mut
             .total_fees
             .checked_sub(amount)
             .ok_or(WithdrawFeeError::MathOverflow)?;
@@ -1003,6 +1005,7 @@ pub struct Participant {
     pub registration_timestamp: i64,
     pub update_timestamp: i64,
     pub last_session_id: u64,
+    pub total_obligations: u32,
     pub name: String,
     pub bump: u8,
 }
@@ -1015,7 +1018,8 @@ impl Participant {
         8 + // registration_timestamp
         8 + // update_timestamp
         8 + // last_session_id
-        4 + 32 + // name
+        4 + // total_obligations
+        (4 + Self::MAX_NAME_LEN) + // name
         1; // bump
 
     pub fn pda(pubkey: Pubkey) -> (Pubkey, u8) {
@@ -1161,8 +1165,6 @@ pub enum UpdateSessionIntervalTimeError {
     Unauthorized,
     Forbidden,
 }
-
-use anchor_lang::prelude::{program::invoke, system_instruction::transfer};
 
 #[derive(Accounts)]
 #[instruction(amount: u64)]
