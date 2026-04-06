@@ -560,6 +560,37 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    /// Method to update fee rate,
+    /// must be invoked by admin
+    pub fn update_session_interval_time(
+        ctx: Context<UpdateSessionIntervalTime>,
+        new_interval_time: u64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+
+        require!(
+            new_interval_time <= clock::SECONDS_PER_DAY * 30,
+            UpdateSessionIntervalTimeError::InvalidRate
+        );
+
+        let state = &mut ctx.accounts.state;
+        let admin = &mut ctx.accounts.admin;
+        let old_interval_time = state.session_interval_time;
+
+        state.session_interval_time = new_interval_time;
+        state.update_timestamp = clock.unix_timestamp;
+        admin.update_timestamp = clock.unix_timestamp;
+
+        emit!(SessionIntervalTimeUpdated {
+            admin: admin.authority,
+            old_interval_time: old_interval_time,
+            new_interval_time: new_interval_time,
+            timestamp: clock.unix_timestamp
+        });
+
+        Ok(())
+    }
+
     /// Method must be called by both participants of obligation.
     /// Each will interact only with his 'cancel flag'.
     /// When both flags are true - only then obligation is considered as 'Canceled'.
@@ -1093,6 +1124,38 @@ pub struct UpdateFeeRate<'info> {
 
 #[error_code]
 pub enum UpdateFeeRateError {
+    NegativeRate,
+    InvalidRate,
+    Unauthorized,
+    Forbidden,
+}
+
+#[derive(Accounts)]
+pub struct UpdateSessionIntervalTime<'info> {
+    #[account(
+        mut,
+        seeds = [b"participant", authority.key().as_ref()],
+        bump,
+        constraint = admin.user_type == UserType::Admin @ UpdateFeeRateError::Forbidden,
+        constraint = admin.authority == authority.key() @ UpdateFeeRateError::Unauthorized
+    )]
+    pub admin: Account<'info, Participant>,
+
+    #[account(
+            mut,
+            seeds = [b"state"],
+            bump
+        )]
+    pub state: Account<'info, ClearingState>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[error_code]
+pub enum UpdateSessionIntervalTimeError {
     NegativeRate,
     InvalidRate,
     Unauthorized,
@@ -1684,6 +1747,14 @@ pub struct FeeRateUpdated {
     pub admin: Pubkey,
     pub old_rate: u64,
     pub new_rate: u64,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct SessionIntervalTimeUpdated {
+    pub admin: Pubkey,
+    pub old_interval_time: u64,
+    pub new_interval_time: u64,
     pub timestamp: i64,
 }
 

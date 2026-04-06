@@ -4,15 +4,14 @@ mod handlers;
 mod ledger_engine;
 mod models;
 
-use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use cron_worker::{CronWorker, WorkerState};
-use dotenv::dotenv;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use std::{env, sync::Arc};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 
 fn parse_env() -> (String, u16, String) {
+    use std::env;
+
     let solana_rpc_url = env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL env missing");
 
     let port = env::var("PORT")
@@ -27,14 +26,14 @@ fn parse_env() -> (String, u16, String) {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    dotenv().ok();
+    dotenv::dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
     let (solana_rpc_url, port, admin_pubkey) = parse_env();
 
     let rpc_client = RpcClient::new(solana_rpc_url.clone());
 
-    let worker_state = Arc::new(RwLock::new(
+    let worker_state = Arc::new(tokio::sync::RwLock::new(
         WorkerState::new(rpc_client)
             .await
             .expect("Can't init worker state"),
@@ -45,7 +44,7 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("🤖 Solana RPC URL: {}", solana_rpc_url);
 
     HttpServer::new(move || {
-        let cors = Cors::default()
+        let cors = actix_cors::Cors::default()
             .allow_any_origin()
             .allow_any_method()
             .allow_any_header()

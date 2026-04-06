@@ -1,11 +1,9 @@
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
 use crate::{auth_service::verify, cron_worker::WorkerState, models::*};
 use actix_web::{web, HttpResponse, Responder};
+use std::sync::Arc;
 
 pub async fn multi_party_clearing(
-    worker_state: web::Data<Arc<RwLock<WorkerState>>>,
+    worker_state: web::Data<Arc<tokio::sync::RwLock<WorkerState>>>,
     admin_pubkey: web::Data<String>,
     payload: web::Json<AdminSignedRequest>,
 ) -> impl Responder {
