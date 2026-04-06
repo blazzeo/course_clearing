@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-clearing_solana = "DtFHUe9366drd6czf5hocSrWswr2DRT9YQhrbfQRmt15"
+clearing_solana = "GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
