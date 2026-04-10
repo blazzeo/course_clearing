@@ -10,7 +10,7 @@ export enum ObligationStatus {
 }
 
 export interface Obligation {
-    publicKey: string;
+    pda: PublicKey;
     status: ObligationStatus;
     from: PublicKey;
     to: PublicKey;

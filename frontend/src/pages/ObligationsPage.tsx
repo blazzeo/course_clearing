@@ -59,7 +59,7 @@ export default function ObligationsPage() {
         }
     }
 
-    const handleDelete = async (obligation: Obligation) => {
+    const handleCancel = async (obligation: Obligation) => {
         if (!publicKey || !program) {
             toast.error('Пожалуйста, подключите кошелек')
             return
@@ -72,7 +72,7 @@ export default function ObligationsPage() {
         try {
             setActionLoading(obligation)
 
-            const tx = await cancelObligation(program, obligation.from, obligation.to, obligation.timestamp, obligation.poolId);
+            const tx = await cancelObligation(program, obligation);
 
             toast.success('Позиция успешно отклонена!')
             loadPositions()
@@ -98,7 +98,7 @@ export default function ObligationsPage() {
         try {
             setActionLoading(obligation)
 
-            const tx = await declineObligation(program, obligation.from, obligation.to, obligation.timestamp, obligation.poolId);
+            const tx = await declineObligation(program, obligation);
 
             toast.success('Позиция успешно отклонена!')
             loadPositions()
@@ -118,14 +118,7 @@ export default function ObligationsPage() {
         }
 
         try {
-            const tx = await confirmObligation(program, obligation.from, obligation.to, obligation.timestamp)
-
-            const latestBlockhash = await program.provider.connection.getLatestBlockhash();
-
-            await program.provider.connection.confirmTransaction({
-                signature: tx,
-                ...latestBlockhash,
-            });
+            const tx = await confirmObligation(program, obligation)
 
             toast.success('Позиция подтверждена успешно!')
             loadPositions()
@@ -196,8 +189,8 @@ export default function ObligationsPage() {
                     <table className="table">
                         <thead>
                             <tr>
-                                <th>Создатель</th>
-                                <th>Контрагент</th>
+                                <th>Дебитор</th>
+                                <th>Кредитор</th>
                                 <th>Сумма</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
@@ -225,7 +218,7 @@ export default function ObligationsPage() {
                                     </td>
                                     <td>{formatDate(obligation.timestamp)}</td>
                                     <td>
-                                        {obligation.status === ObligationStatus.Created && obligation.to.equals(publicKey) && (
+                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey) && (
                                             <button
                                                 className="btn btn-primary"
                                                 style={{ padding: '6px 12px', fontSize: '14px' }}
@@ -235,7 +228,7 @@ export default function ObligationsPage() {
                                                 {actionLoading === obligation ? 'Подтверждение...' : 'Подтвердить'}
                                             </button>
                                         )}
-                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey) && (
+                                        {obligation.status === ObligationStatus.Created && obligation.to.equals(publicKey) && (
                                             <button
                                                 className="btn btn-danger"
                                                 style={{ padding: '6px 12px', fontSize: '14px', marginLeft: '8px' }}
@@ -249,7 +242,7 @@ export default function ObligationsPage() {
                                             <button
                                                 className="btn btn-danger"
                                                 style={{ padding: '6px 12px', fontSize: '14px', marginLeft: '8px' }}
-                                                onClick={() => handleDelete(obligation)}
+                                                onClick={() => handleCancel(obligation)}
                                                 disabled={actionLoading === obligation}
                                             >
                                                 {actionLoading === obligation ? 'Отмена...' : 'Отменить'}

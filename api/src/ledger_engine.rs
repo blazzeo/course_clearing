@@ -27,12 +27,12 @@ pub fn netting_clearing(
     // фильтруем нулевые позиции (уже уравновешены)
     entries.retain(|(_, amt)| *amt != 0);
 
-    // проверим, что суммарно всё уравновешено (в идеале да).
-    let total: i128 = entries.iter().map(|(_, a)| *a as i128).sum();
-    if total != 0 {
-        // если сумма != 0 — пока возвращаем ошибку, можно изменить поведение (например масштабировать или оставить остаток)
-        return Err(format!("positions not balanced, total sum = {}", total).into());
-    }
+    // // проверим, что суммарно всё уравновешено (в идеале да).
+    // let total: i128 = entries.iter().map(|(_, a)| *a as i128).sum();
+    // if total != 0 {
+    //     // если сумма != 0 — пока возвращаем ошибку, можно изменить поведение (например масштабировать или оставить остаток)
+    //     return Err(format!("positions not balanced, total sum = {}", total).into());
+    // }
 
     // создадим списки кредиторов и должников
     // кредитор: amt > 0 (получает), должник: amt < 0 (платит)
@@ -63,12 +63,13 @@ pub fn netting_clearing(
         let (deb_addr, deb_amt) = &debtors[di];
 
         let transfer = std::cmp::min(*cred_amt, *deb_amt);
+        let transfer_u64: u64 = transfer.try_into().expect("transfer must be >= 0");
 
         // добавляем транзакцию: debtor -> creditor
         settlements.push(RawSettlement {
             from_address: *deb_addr,
             to_address: *cred_addr,
-            amount: transfer,
+            amount: transfer_u64,
         });
 
         // уменьшаем остатки

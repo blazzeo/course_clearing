@@ -6,7 +6,7 @@ use sqlx::FromRow;
 pub struct RawSettlement {
     pub from_address: Pubkey,
     pub to_address: Pubkey,
-    pub amount: i64,
+    pub amount: u64,
 }
 
 #[derive(Deserialize)]

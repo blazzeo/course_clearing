@@ -19,6 +19,7 @@ pub mod clearing_solana {
         state.total_participants = 0;
         state.total_sessions = 0;
         state.total_obligations = 0;
+        state.last_session_timestamp = clock.unix_timestamp;
         state.fee_rate_bps = 0;
         state.update_timestamp = clock.unix_timestamp;
 
@@ -62,7 +63,7 @@ pub mod clearing_solana {
         obligation.from = from;
         obligation.to = to;
         obligation.amount = amount;
-        obligation.timestamp = clock.unix_timestamp;
+        obligation.timestamp = timestamp;
         obligation.session_id = None;
         obligation.bump = ctx.bumps.new_obligation;
         obligation.pool_id = pool_id;
@@ -85,6 +86,14 @@ pub mod clearing_solana {
             .total_obligations
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
+
+        emit!(ObligationCreated {
+            obligation: obligation.key(),
+            from,
+            to,
+            amount,
+            timestamp: clock.unix_timestamp
+        });
 
         Ok(())
     }
@@ -116,17 +125,14 @@ pub mod clearing_solana {
         // Event
         emit!(ObligationDeclined {
             obligation: obligation.key(),
-            from: ctx.accounts.from_participant.key(),
-            to: ctx.accounts.to_participant.key(),
-            amount: obligation.amount,
             timestamp: clock.unix_timestamp
         });
 
         Ok(())
     }
 
-    pub fn process_obligation(
-        ctx: Context<ProcessObligation>,
+    pub fn create_position(
+        ctx: Context<CreatePosition>,
         from: Pubkey,
         to: Pubkey,
         timestamp: i64,
@@ -192,9 +198,11 @@ pub mod clearing_solana {
         let clock = Clock::get()?;
 
         let session = &mut ctx.accounts.session;
+        let state = &mut ctx.accounts.state;
 
         session.status = ClearingSessionStatus::Closed;
         session.closed_at = clock.unix_timestamp;
+        state.last_session_timestamp = clock.unix_timestamp;
 
         Ok(())
     }
@@ -323,7 +331,10 @@ pub mod clearing_solana {
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
 
-        msg!("Participant created: {}", participant.key());
+        emit!(ParticipantRegistered {
+            participant: participant.key(),
+            timestamp: clock.unix_timestamp
+        });
 
         Ok(())
     }
@@ -333,36 +344,56 @@ pub mod clearing_solana {
         session_id: u64,
         to: Pubkey,
         timestamp: i64,
+        amount: u64,
     ) -> Result<()> {
         let net_position = &mut ctx.accounts.net_position;
         let obligation = &mut ctx.accounts.obligation;
 
         require!(
-            net_position.net_amount != 0,
-            SettlePositionError::ZeroPosition
+            net_position.status == NetPositionStatus::FeePaid,
+            SettlePositionError::FeeNotPaid
         );
+        require!(amount > 0, SettlePositionError::InvalidAmount);
+        require!(obligation.amount >= amount, SettlePositionError::Overpay);
 
-        //  Create instruction
-        let transfer_instruction = Transfer {
-            from: ctx.accounts.authority.to_account_info(),
-            to: ctx.accounts.recipient.to_account_info(),
-        };
-
+        // transfer
         let cpi_ctx = CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
-            transfer_instruction,
+            Transfer {
+                from: ctx.accounts.authority.to_account_info(),
+                to: ctx.accounts.recipient.to_account_info(),
+            },
         );
 
         //  Payment of net position
-        system_program::transfer(cpi_ctx, net_position.fee_amount)?;
+        system_program::transfer(cpi_ctx, amount)?;
 
-        //  Update net position amount
-        net_position.net_amount = net_position
-            .net_amount
-            .checked_sub(obligation.amount)
-            .ok_or(CustomErrors::MathOverflow)?;
+        let clock = Clock::get()?;
 
-        obligation.status = ObligationStatus::Netted;
+        if amount < obligation.amount {
+            obligation.amount -= amount;
+            obligation.status = ObligationStatus::PartiallyNetted;
+            net_position.status = NetPositionStatus::Done;
+
+            emit!(PositionPartialySettled {
+                position: net_position.key(),
+                settle_amount: amount,
+                remaining_amount: obligation.amount,
+                timestamp: clock.unix_timestamp
+            });
+        } else {
+            obligation.amount = 0;
+            obligation.status = ObligationStatus::Netted;
+            net_position.status = NetPositionStatus::Done;
+
+            let pool = &mut ctx.accounts.pool;
+            pool.remove_obligation(obligation.key())?;
+
+            emit!(PositionSettled {
+                position: net_position.key(),
+                timestamp: clock.unix_timestamp
+            });
+        }
 
         msg!("Position {} settled", net_position.key());
 
@@ -393,9 +424,6 @@ pub mod clearing_solana {
         // Event
         emit!(ObligationConfirmed {
             obligation: obligation.key(),
-            from: ctx.accounts.from_participant.key(),
-            to: ctx.accounts.to_participant.key(),
-            amount: obligation.amount,
             timestamp: clock.unix_timestamp
         });
 
@@ -444,7 +472,10 @@ pub mod clearing_solana {
             .checked_sub(amount)
             .ok_or(WithdrawFeeError::MathOverflow)?;
 
+        let authority = &ctx.accounts.authority;
+
         emit!(FeeWithdrawed {
+            admin: authority.key(),
             amount,
             timestamp: clock.unix_timestamp
         });
@@ -529,8 +560,7 @@ pub mod clearing_solana {
 
         emit!(FeePaid {
             participant: ctx.accounts.authority.key(),
-            session_id,
-            amount: net_position.fee_amount,
+            position: net_position.key(),
             timestamp: clock.unix_timestamp,
         });
 
@@ -647,17 +677,15 @@ pub mod clearing_solana {
 
             pool.remove_obligation(obligation.key())?;
 
-            // Event
-            emit!(ObligationCancelled {
-                obligation: obligation.key(),
-                from: ctx.accounts.from_participant.key(),
-                to: ctx.accounts.to_participant.key(),
-                amount: obligation.amount,
-                timestamp: clock.unix_timestamp
-            });
-
             msg!("Obligation {} cancelled by both parties", obligation.key());
         }
+
+        // Event
+        emit!(ObligationCancelled {
+            obligation: obligation.key(),
+            participant: authority.key(),
+            timestamp: clock.unix_timestamp
+        });
 
         Ok(())
     }
@@ -898,6 +926,7 @@ pub enum ObligationStatus {
     Created,
     Confirmed,
     Declined,
+    PartiallyNetted,
     Netted,
     Cancelled,
 }
@@ -934,7 +963,9 @@ impl ObligationPool {
         for i in 0..Self::MAX_OBLIGATIONS {
             if self.obligations[i] == Pubkey::default() {
                 self.obligations[i] = obligation_pubkey;
-                self.occupied_count
+
+                self.occupied_count = self
+                    .occupied_count
                     .checked_add(1)
                     .ok_or(CustomErrors::MathOverflow)?;
 
@@ -952,9 +983,9 @@ impl ObligationPool {
             PoolError::SlotEmpty
         );
 
-        // self.occupied[index] = false;
         self.obligations[index] = Pubkey::default();
-        self.occupied_count
+        self.occupied_count = self
+            .occupied_count
             .checked_sub(1)
             .ok_or(CustomErrors::MathOverflow)?;
 
@@ -965,7 +996,9 @@ impl ObligationPool {
         for i in 0..Self::MAX_OBLIGATIONS {
             if self.obligations[i] == obligation {
                 self.obligations[i] = Pubkey::default();
-                self.occupied_count
+
+                self.occupied_count = self
+                    .occupied_count
                     .checked_sub(1)
                     .ok_or(CustomErrors::MathOverflow)?;
 
@@ -1073,6 +1106,7 @@ pub struct ClearingState {
     pub total_participants: u64,
     pub total_obligations: u64,
     pub session_interval_time: u64,
+    pub last_session_timestamp: i64,
     pub fee_rate_bps: u64,
     pub update_timestamp: i64,
     pub bump: u8,
@@ -1085,6 +1119,7 @@ impl ClearingState {
         8 + // total_participants
         8 + // total_obligations
         8 + // session_interval_time
+        8 + // last_session_timestamp
         8 + // fee_rate_bps
         8 + // update_timestamp
         1; // bump
@@ -1146,10 +1181,10 @@ pub struct UpdateSessionIntervalTime<'info> {
     pub admin: Account<'info, Participant>,
 
     #[account(
-            mut,
-            seeds = [b"state"],
-            bump
-        )]
+        mut,
+        seeds = [b"state"],
+        bump
+    )]
     pub state: Account<'info, ClearingState>,
 
     #[account(mut)]
@@ -1378,7 +1413,7 @@ pub enum DeclineObligationError {
 
 #[derive(Accounts)]
 #[instruction(from: Pubkey, to: Pubkey, timestamp: i64)]
-pub struct ProcessObligation<'info> {
+pub struct CreatePosition<'info> {
     #[account(
         mut,
         seeds = [b"state"],
@@ -1448,12 +1483,12 @@ pub struct FinalizeClearingSession<'info> {
     pub state: Account<'info, ClearingState>,
 
     #[account(
-            init,
-            payer = authority,
-            space = 8 + ClearingSession::LEN,
-            seeds = [b"session", state.total_sessions.to_le_bytes().as_ref()],
-            bump
-        )]
+        init,
+        payer = authority,
+        space = 8 + ClearingSession::LEN,
+        seeds = [b"session", state.total_sessions.to_le_bytes().as_ref()],
+        bump
+    )]
     pub session: Account<'info, ClearingSession>,
 
     #[account(mut)]
@@ -1471,12 +1506,12 @@ pub struct StartClearingSession<'info> {
     pub state: Account<'info, ClearingState>,
 
     #[account(
-            init,
-            payer = authority,
-            space = 8 + ClearingSession::LEN,
-            seeds = [b"session", (state.total_sessions + 1).to_le_bytes().as_ref()],
-            bump
-        )]
+        init,
+        payer = authority,
+        space = 8 + ClearingSession::LEN,
+        seeds = [b"session", (state.total_sessions + 1).to_le_bytes().as_ref()],
+        bump
+    )]
     pub session: Account<'info, ClearingSession>,
 
     #[account(mut)]
@@ -1622,7 +1657,7 @@ pub struct RegisterParticipant<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(session_id: u64, to: Pubkey, timestamp: i64)]
+#[instruction(session_id: u64, to: Pubkey, timestamp: i64, amount: u64)]
 pub struct SettlePosition<'info> {
     #[account(
         mut,
@@ -1647,6 +1682,13 @@ pub struct SettlePosition<'info> {
     )]
     pub obligation: Account<'info, Obligation>,
 
+    #[account(
+        mut,
+        seeds = [b"pool", &obligation.pool_id.to_le_bytes()],
+        bump
+    )]
+    pub pool: Account<'info, ObligationPool>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -1662,6 +1704,8 @@ pub enum SettlePositionError {
     FeeNotPaid,
     NoNeedInPayment,
     ZeroPosition,
+    Overpay,
+    InvalidAmount,
 }
 
 #[derive(Accounts)]
@@ -1675,9 +1719,9 @@ pub struct UpdateParticipantLastSessionId<'info> {
     pub participant: Account<'info, Participant>,
 
     #[account(
-            seeds = [b"state"],
-            bump
-        )]
+        seeds = [b"state"],
+        bump
+    )]
     pub state: Account<'info, ClearingState>,
 
     #[account(
@@ -1732,14 +1776,14 @@ pub struct EscrowInitialized {
 
 #[event]
 pub struct FeePaid {
+    pub position: Pubkey,
     pub participant: Pubkey,
-    pub session_id: u64,
-    pub amount: u64,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct FeeWithdrawed {
+    pub admin: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
 }
@@ -1772,48 +1816,51 @@ pub struct ObligationCreated {
 #[event]
 pub struct ObligationConfirmed {
     pub obligation: Pubkey,
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct ObligationDeclined {
     pub obligation: Pubkey,
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct ObligationCancelled {
     pub obligation: Pubkey,
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
+    pub participant: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct ObligationNetted {
     pub obligation: Pubkey,
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct ParticipantRegistered {
-    pub pariticipant: Pubkey,
+    pub participant: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct PoolCreated {
     pub id: u32,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct PositionSettled {
+    pub position: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct PositionPartialySettled {
+    pub position: Pubkey,
+    pub settle_amount: u64,
+    pub remaining_amount: u64,
     pub timestamp: i64,
 }
 

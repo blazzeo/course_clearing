@@ -3,11 +3,13 @@ mod cron_worker;
 mod handlers;
 mod ledger_engine;
 mod models;
+mod indexer;
 
 use actix_web::{web, App, HttpServer};
 use cron_worker::{CronWorker, WorkerState};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 fn parse_env() -> (String, u16, String) {
     use std::env;
@@ -38,7 +40,13 @@ async fn main() -> std::io::Result<()> {
             .await
             .expect("Can't init worker state"),
     ));
-    let cron_worker = Arc::new(CronWorker::start(worker_state.clone()));
+
+    index_
+
+    let (sender, receiver) = mpsc::channel(10);
+    let cron_worker = Arc::new(CronWorker::new(worker_state.clone(), receiver));
+
+    let sender = Arc::new(sender);
 
     tracing::info!("🚀 Starting API server on port {}", port);
     tracing::info!("🤖 Solana RPC URL: {}", solana_rpc_url);
@@ -56,6 +64,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(worker_state.clone()))
             .app_data(web::Data::new(admin_pubkey.clone()))
             .app_data(web::Data::new(cron_worker.clone()))
+            .app_data(web::Data::new(sender.clone()))
             .route("/health", web::get().to(handlers::health))
             .service(web::scope("/api").route(
                 "/clearing/run",

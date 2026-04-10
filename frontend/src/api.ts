@@ -73,44 +73,11 @@ export async function initEscrow(program: Program<ClearingSolana>) {
         .rpc();
 }
 
-export async function cancelObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number, poolId: number) {
+export async function registerObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, amount: number, pool_id: number) {
     const authority = program.provider.publicKey;
 
-    const ts = new BN(timestamp)
-
-    const indexBuf = Buffer.alloc(4);
-    indexBuf.writeUInt32LE(poolId);
-    const [poolPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), indexBuf],
-        program.programId
-    );
-
-    return await program.methods
-        .cancelObligation(from, to, ts)
-        .accounts({
-            authority,
-            pool: poolPda
-        })
-        .rpc();
-}
-
-export async function confirmObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
-    const authority = program.provider.publicKey;
-
-    const ts = new BN(timestamp)
-
-    return await program.methods
-        .confirmObligation(from, to, ts)
-        .accounts({
-            authority,
-        })
-        .rpc();
-}
-
-export async function registerObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, amount: number, pool_id: number, timestamp: number) {
-    const authority = program.provider.publicKey;
-
-    const ts = new BN(timestamp)
+    const timestamp = Math.floor(Date.now() / 1000);
+    const ts = new BN(timestamp);
 
     const id = new BN(pool_id)
 
@@ -124,23 +91,108 @@ export async function registerObligation(program: Program<ClearingSolana>, from:
         .rpc();
 }
 
-export async function declineObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number, poolId: number) {
+export async function confirmObligation(
+    program: Program<any>,
+    obligation: Obligation // Передаем весь объект целиком!
+) {
     const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
 
-    const ts = new BN(timestamp)
+    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
+    const from = obligation.from;
+    const to = obligation.to;
+    // Используем BN напрямую, если он сохранился, или создаем новый
+    const tsBN = new BN(obligation.timestamp);
 
-    const indexBuf = Buffer.alloc(4);
-    indexBuf.writeUInt32LE(poolId);
-    const [poolPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), indexBuf],
+    // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
+    const [fromParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), from.toBuffer()],
         program.programId
     );
 
+    const [toParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), to.toBuffer()],
+        program.programId
+    );
+
+    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
+    const obligationPda = obligation.pda;
+
     return await program.methods
-        .declineObligation(from, to, ts)
+        .confirmObligation(from, to, tsBN) // Эти аргументы используются для проверки seeds!
         .accounts({
-            authority,
-            pool: poolPda
+            fromParticipant,
+            toParticipant,
+            obligation: obligationPda,
+            authority: authority,
+        })
+        .rpc();
+}
+
+export async function cancelObligation(program: Program<ClearingSolana>, obligation: Obligation) {
+    const authority = program.provider.publicKey;
+
+    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
+    const from = obligation.from;
+    const to = obligation.to;
+    // Используем BN напрямую, если он сохранился, или создаем новый
+    const tsBN = new BN(obligation.timestamp);
+
+    // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
+    const [fromParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), from.toBuffer()],
+        program.programId
+    );
+
+    const [toParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), to.toBuffer()],
+        program.programId
+    );
+
+    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
+    const obligationPda = obligation.pda;
+
+    return await program.methods
+        .cancelObligation(from, to, tsBN)
+        .accounts({
+            fromParticipant,
+            toParticipant,
+            obligation: obligationPda,
+            authority: authority,
+        })
+        .rpc();
+}
+
+export async function declineObligation(program: Program<ClearingSolana>, obligation: Obligation) {
+    const authority = program.provider.publicKey;
+
+    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
+    const from = obligation.from;
+    const to = obligation.to;
+    // Используем BN напрямую, если он сохранился, или создаем новый
+    const tsBN = new BN(obligation.timestamp);
+
+    // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
+    const [fromParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), from.toBuffer()],
+        program.programId
+    );
+
+    const [toParticipant] = PublicKey.findProgramAddressSync(
+        [Buffer.from("participant"), to.toBuffer()],
+        program.programId
+    );
+
+    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
+    const obligationPda = obligation.pda;
+
+    return await program.methods
+        .declineObligation(from, to, tsBN)
+        .accounts({
+            fromParticipant,
+            toParticipant,
+            obligation: obligationPda,
+            authority: authority,
         })
         .rpc();
 }
@@ -425,7 +477,7 @@ export async function getAllObligations(
     const accounts = await program.account.obligation.all()
 
     const obligations: Obligation[] = accounts.map(({ account, publicKey }) => ({
-        publicKey: publicKey.toBase58(),
+        pda: publicKey,
         status: account.status,
         from: account.from,
         to: account.to,
@@ -506,7 +558,7 @@ export async function getObligationsByParticipantFromPools(
                 else if (acc.status.cancelled) status = ObligationStatus.Cancelled;
 
                 const obligation: Obligation = {
-                    publicKey: chunk[index].toBase58(),
+                    pda: chunk[index],
                     status: status,
                     from: acc.from,
                     to: acc.to,
@@ -610,7 +662,7 @@ export async function getObligationsByParticipant(
             if (ot?.cancelled !== undefined) obligation_status = ObligationStatus.Cancelled
 
             const obligation: Obligation = {
-                publicKey: p.publicKey.toBase58(),
+                pda: p.publicKey,
                 status: obligation_status,
                 from: acc.from,
                 to: acc.to,
