@@ -10,7 +10,8 @@ export function MapObligationStatus(status: ObligationStatus) {
     switch (status) {
         case ObligationStatus.All: return "All";
         case ObligationStatus.Created: return "Created";
-        case ObligationStatus.Confirmed: return "Confirmed";
+        case ObligationStatus.Confirmed: return "В процессе";
+        case ObligationStatus.PartiallyNetted: return "PartiallyNetted";
         case ObligationStatus.Declined: return "Declined";
         case ObligationStatus.Netted: return "Netted";
         case ObligationStatus.Cancelled: return "Cancelled";
@@ -134,6 +135,8 @@ export default function ObligationsPage() {
                 return 'status-badge status-pending'
             case ObligationStatus.Confirmed:
                 return 'status-badge status-confirmed'
+            case ObligationStatus.PartiallyNetted:
+                return 'status-badge status-confirmed'
             case ObligationStatus.Netted:
                 return 'status-badge status-cleared'
             default:
@@ -143,7 +146,25 @@ export default function ObligationsPage() {
 
     const formatDate = (date: number | null) => {
         if (!date) return '-'
-        return new Date(date).toLocaleString('ru-RU')
+        // On-chain timestamps are usually in seconds, JS Date expects milliseconds.
+        const tsMs = date < 1_000_000_000_000 ? date * 1000 : date
+        return new Date(tsMs).toLocaleString('ru-RU')
+    }
+
+    const cancellationInfo = (obligation: Obligation) => {
+        const fromRequested = obligation.fromCancel
+        const toRequested = obligation.toCancel
+
+        if (!fromRequested && !toRequested) {
+            return "Отмена не запрошена"
+        }
+        if (fromRequested && toRequested) {
+            return "Оба участника запросили отмену"
+        }
+        if (fromRequested) {
+            return "Отмена запрошена дебитором"
+        }
+        return "Отмена запрошена кредитором"
     }
 
     // Если кошелёк не подключён — возвращаем пустую страницу
@@ -172,6 +193,7 @@ export default function ObligationsPage() {
                         <option value={ObligationStatus.All}>Все</option>
                         <option value={ObligationStatus.Created}>Ожидают подтверждения</option>
                         <option value={ObligationStatus.Confirmed}>Подтверждены</option>
+                        <option value={ObligationStatus.PartiallyNetted}>Частично погашены</option>
                         <option value={ObligationStatus.Netted}>Выполнены</option>
                     </select>
                 </div>
@@ -249,7 +271,11 @@ export default function ObligationsPage() {
                                             </button>
                                         )}
                                         {obligation.status === ObligationStatus.Confirmed && (
-                                            <span style={{ color: '#666' }}>На обработке</span>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                <span style={{ color: '#856404', fontSize: '12px' }}>
+                                                    {cancellationInfo(obligation)}
+                                                </span>
+                                            </div>
                                         )}
                                         {obligation.status === ObligationStatus.Netted && (
                                             <span style={{ color: '#666' }}>Завершено</span>

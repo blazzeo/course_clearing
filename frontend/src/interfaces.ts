@@ -4,6 +4,7 @@ export enum ObligationStatus {
     All,
     Created,
     Confirmed,
+    PartiallyNetted,
     Declined,
     Netted,
     Cancelled,
@@ -16,7 +17,7 @@ export interface Obligation {
     to: PublicKey;
     amount: number;
     timestamp: number;
-    sessionId: any;
+    sessionId: number;
     fromCancel: boolean;
     toCancel: boolean;
     poolId: number;
@@ -36,7 +37,7 @@ export interface Participant {
     registrationTimestamp: number,
     updateTimestamp: number,
     lastSessionId: number,
-    name: String,
+    name: string,
     totalObligations: number,
     bump: number,
 }
@@ -47,6 +48,7 @@ export interface SystemInfo {
     total_obligations: number
     fee_rate_bps: number
     session_interval_time: number
+    last_session_timestamp: number
 }
 
 export enum NetPositionStatus {
@@ -65,7 +67,7 @@ export interface Bill {
     fee_amount: number,
 }
 
-export function UserTypeToString(userType: UserType): String {
+export function UserTypeToString(userType: UserType): string {
     switch (userType) {
         case UserType.Counterparty: return 'Контрагент';
         case UserType.Administator: return 'Администратор';

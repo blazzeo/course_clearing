@@ -1,10 +1,14 @@
 import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
 import { useAnchorWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useMemo } from 'react';
 import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
-import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { sha256 } from 'js-sha256';
 import { Bill, Obligation, ObligationStatus, Participant, SystemInfo, UserType } from './interfaces';
+
+type BNLike = { toNumber: () => number };
+type AnchorEnum = Record<string, unknown>;
 
 export function getProgram(provider: AnchorProvider): Program<ClearingSolana> {
     return new Program<ClearingSolana>(
@@ -17,10 +21,11 @@ export function useProgram() {
     const { connection } = useConnection();
     const wallet = useAnchorWallet();
 
-    if (!wallet) return null;
-
-    const provider = new AnchorProvider(connection, wallet, {});
-    return getProgram(provider);
+    return useMemo(() => {
+        if (!wallet) return null;
+        const provider = new AnchorProvider(connection, wallet, {});
+        return getProgram(provider);
+    }, [connection, wallet]);
 }
 
 export function getParticipantPda(
@@ -73,11 +78,17 @@ export async function initEscrow(program: Program<ClearingSolana>) {
         .rpc();
 }
 
-export async function registerObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, amount: number, pool_id: number) {
+export async function registerObligation(
+    program: Program<ClearingSolana>,
+    from: PublicKey,
+    to: PublicKey,
+    amount: number,
+    pool_id: number,
+    timestamp?: number
+) {
     const authority = program.provider.publicKey;
 
-    const timestamp = Math.floor(Date.now() / 1000);
-    const ts = new BN(timestamp);
+    const ts = new BN(timestamp ?? Math.floor(Date.now() / 1000));
 
     const id = new BN(pool_id)
 
@@ -92,7 +103,7 @@ export async function registerObligation(program: Program<ClearingSolana>, from:
 }
 
 export async function confirmObligation(
-    program: Program<any>,
+    program: Program<ClearingSolana>,
     obligation: Obligation // Передаем весь объект целиком!
 ) {
     const authority = program.provider.publicKey;
@@ -197,28 +208,59 @@ export async function declineObligation(program: Program<ClearingSolana>, obliga
         .rpc();
 }
 
-export async function processObligation(program: Program<ClearingSolana>, from: PublicKey, to: PublicKey, timestamp: number) {
-    const authority = program.provider.publicKey;
-
-    const ts = new BN(timestamp)
-
-    return await program.methods
-        .processObligation(from, to, ts)
-        .accounts({
-            payer: authority,
-        })
-        .rpc();
-}
-
 export async function finalizeClearingSession(program: Program<ClearingSolana>) {
     const authority = program.provider.publicKey;
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const [session] = PublicKey.findProgramAddressSync(
+        [
+            Buffer.from("session"),
+            new BN(stateAccount.totalSessions.toString()).toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+    );
 
     return await program.methods
         .finalizeClearingSession()
         .accounts({
+            state,
+            session,
             authority,
         })
         .rpc();
+}
+
+export async function buildFinalizeClearingSessionTx(
+    program: Program<ClearingSolana>,
+    sessionId?: number
+): Promise<Transaction> {
+    const authority = program.provider.publicKey;
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const effectiveSessionId =
+        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
+    const [session] = PublicKey.findProgramAddressSync(
+        [
+            Buffer.from("session"),
+            new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+    );
+
+    return await program.methods
+        .finalizeClearingSession()
+        .accounts({
+            state,
+            session,
+            authority,
+        })
+        .transaction();
 }
 
 export async function startClearingSession(program: Program<ClearingSolana>, totalObligations: number) {
@@ -238,7 +280,7 @@ export async function startClearingSession(program: Program<ClearingSolana>, tot
     const [session] = PublicKey.findProgramAddressSync(
         [
             Buffer.from('session'),
-            new BN(stateAccount.totalSessions).toArrayLike(Buffer, 'le', 8),
+            new BN(stateAccount.totalSessions.toString()).addn(1).toArrayLike(Buffer, 'le', 8),
         ],
         program.programId
     )
@@ -252,8 +294,40 @@ export async function startClearingSession(program: Program<ClearingSolana>, tot
         .rpc();
 }
 
+export async function buildStartClearingSessionTx(
+    program: Program<ClearingSolana>,
+    totalObligations: number
+): Promise<Transaction> {
+    const authority = program.provider.publicKey;
+    const total_obligations = new BN(totalObligations);
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const [session] = PublicKey.findProgramAddressSync(
+        [
+            Buffer.from('session'),
+            new BN(stateAccount.totalSessions.toString()).addn(1).toArrayLike(Buffer, 'le', 8),
+        ],
+        program.programId
+    );
+
+    return await program.methods
+        .startClearingSession(total_obligations)
+        .accounts({
+            session,
+            authority,
+        })
+        .transaction();
+}
+
 export async function createNewPool(program: Program<ClearingSolana>, last_pool_id: number) {
     const authority = program.provider.publicKey;
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
 
     const lastPoolId = new BN(last_pool_id)
     const nextPoolId = new BN(last_pool_id + 1)
@@ -267,10 +341,113 @@ export async function createNewPool(program: Program<ClearingSolana>, last_pool_
     return await program.methods
         .createNewPool(lastPoolId)
         .accounts({
+            state,
             newPool,
             authority,
         })
         .rpc();
+}
+
+export async function createPositionByObligation(
+    program: Program<ClearingSolana>,
+    obligationPda: PublicKey,
+    expectedAmount?: number
+) {
+    const payer = program.provider.publicKey;
+    if (!payer) throw new Error("Wallet not connected");
+
+    const obligation = await program.account.obligation.fetch(obligationPda);
+    if (expectedAmount !== undefined) {
+        const obligationAmount = Number(obligation.amount.toString());
+        if (obligationAmount !== expectedAmount) {
+            console.warn(
+                `Allocation amount mismatch for obligation ${obligationPda.toBase58()}: expected ${expectedAmount}, on-chain ${obligationAmount}. Proceeding with on-chain amount.`
+            );
+        }
+    }
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), new BN(stateAccount.totalSessions.toString()).toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    const [pool] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
+        program.programId
+    );
+    const [fromPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), obligation.from.toBuffer()],
+        program.programId
+    );
+    const [toPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), obligation.to.toBuffer()],
+        program.programId
+    );
+
+    return await program.methods
+        .createPosition(obligation.from, obligation.to, obligation.timestamp)
+        .accounts({
+            state,
+            session,
+            obligation: obligationPda,
+            pool,
+            fromPosition,
+            toPosition,
+            payer,
+            systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+}
+
+export async function buildCreatePositionByObligationTx(
+    program: Program<ClearingSolana>,
+    obligationPda: PublicKey,
+    sessionId?: number
+): Promise<Transaction> {
+    const payer = program.provider.publicKey;
+    if (!payer) throw new Error("Wallet not connected");
+
+    const obligation = await program.account.obligation.fetch(obligationPda);
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const effectiveSessionId =
+        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    const [pool] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
+        program.programId
+    );
+    const [fromPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), obligation.from.toBuffer()],
+        program.programId
+    );
+    const [toPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), obligation.to.toBuffer()],
+        program.programId
+    );
+
+    return await program.methods
+        .createPosition(obligation.from, obligation.to, obligation.timestamp)
+        .accounts({
+            state,
+            session,
+            obligation: obligationPda,
+            pool,
+            fromPosition,
+            toPosition,
+            payer,
+            systemProgram: SystemProgram.programId,
+        })
+        .transaction();
 }
 
 export async function registerParticipant(program: Program<ClearingSolana>, name: string) {
@@ -317,18 +494,25 @@ export async function registerParticipant(program: Program<ClearingSolana>, name
         .rpc();
 }
 
-export async function settle_position(program: Program<ClearingSolana>, session_id: number, to: PublicKey, timestamp: number) {
+export async function settle_position(
+    program: Program<ClearingSolana>,
+    session_id: number,
+    to: PublicKey,
+    timestamp: number,
+    amount: number
+) {
     const authority = program.provider.publicKey;
 
     const sid = new BN(session_id);
 
     const ts = new BN(timestamp);
+    const amt = new BN(amount);
 
     // recipient
     const recipient = to;
 
     return await program.methods
-        .settlePosition(sid, to, ts)
+        .settlePosition(sid, to, ts, amt)
         .accounts({
             authority,
             recipient,
@@ -349,8 +533,11 @@ export async function withdrawFee(program: Program<ClearingSolana>, amount: numb
         .rpc();
 }
 
-// TODO: fix userType enum
-export async function updateUserType(program: Program<ClearingSolana>, participant: PublicKey, userType: any) {
+export async function updateUserType(
+    program: Program<ClearingSolana>,
+    participant: PublicKey,
+    userType: AnchorEnum
+) {
     const authority = program.provider.publicKey;
 
     return await program.methods
@@ -363,12 +550,25 @@ export async function updateUserType(program: Program<ClearingSolana>, participa
 
 export async function payFee(program: Program<ClearingSolana>, session_id: number) {
     const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
 
     const sid = new BN(session_id)
+    const participant = getParticipantPda(program.programId, authority);
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), sid.toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    const [netPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), authority.toBuffer()],
+        program.programId
+    );
 
     return await program.methods
         .payFee(sid)
         .accounts({
+            participant,
+            session,
+            netPosition,
             authority,
         })
         .rpc();
@@ -416,7 +616,8 @@ export async function getClearingState(program: Program<ClearingSolana>): Promis
         total_participants: account.totalParticipants.toNumber(),
         total_sessions: account.totalSessions.toNumber(),
         fee_rate_bps: account.feeRateBps.toNumber(),
-        session_interval_time: account.sessionIntervalTime.toNumber()
+        session_interval_time: account.sessionIntervalTime.toNumber(),
+        last_session_timestamp: account.lastSessionTimestamp.toNumber(),
     }
 
     return info
@@ -453,7 +654,7 @@ export function getPoolPda(
     return PublicKey.findProgramAddressSync(
         [
             Buffer.from("pool"),
-            new BN(poolId).toArrayLike(Buffer, "le", 8),
+            new BN(poolId).toArrayLike(Buffer, "le", 4),
         ],
         program.programId
     )[0]
@@ -478,12 +679,12 @@ export async function getAllObligations(
 
     const obligations: Obligation[] = accounts.map(({ account, publicKey }) => ({
         pda: publicKey,
-        status: account.status,
+        status: parseObligationStatus(account.status as AnchorEnum),
         from: account.from,
         to: account.to,
         amount: safeBN(account.amount),
         timestamp: safeBN(account.timestamp),
-        sessionId: safeBN(account.sessionId),
+        sessionId: safeOptionalU64(account.sessionId),
         fromCancel: account.fromCancel,
         toCancel: account.toCancel,
         poolId: safeBN(account.poolId),
@@ -511,13 +712,13 @@ export async function getAllParticipants(
     }));
 }
 
-function parseUserType(userType: any): UserType {
+function parseUserType(userType: AnchorEnum): UserType {
     if (userType?.admin !== undefined) return UserType.Administator;
     if (userType?.participant !== undefined) return UserType.Counterparty;
     return UserType.Guest;
 }
 
-function safeBN(value: any): number {
+function safeBN(value: BNLike | null | undefined): number {
     if (!value) return 0;
 
     const num = value.toNumber();
@@ -527,6 +728,35 @@ function safeBN(value: any): number {
     }
 
     return num;
+}
+
+function safeOptionalU64(value: unknown): number {
+    if (!value) return 0;
+    if (typeof value === "object" && value !== null && "toNumber" in value) {
+        return safeBN(value as BNLike);
+    }
+    if (typeof value === "object" && value !== null && "some" in value) {
+        const wrapped = (value as { some?: BNLike }).some;
+        return wrapped ? safeBN(wrapped) : 0;
+    }
+    return 0;
+}
+
+function parseObligationStatus(status: AnchorEnum): ObligationStatus {
+    if (status?.created !== undefined) return ObligationStatus.Created;
+    if (status?.confirmed !== undefined) return ObligationStatus.Confirmed;
+    if (status?.partiallyNetted !== undefined) return ObligationStatus.PartiallyNetted;
+    if (status?.declined !== undefined) return ObligationStatus.Declined;
+    if (status?.netted !== undefined) return ObligationStatus.Netted;
+    if (status?.cancelled !== undefined) return ObligationStatus.Cancelled;
+    return ObligationStatus.Created;
+}
+
+function parseNetPositionStatus(status: AnchorEnum): Bill["status"] {
+    if (status?.none !== undefined) return 0;
+    if (status?.feePaid !== undefined) return 1;
+    if (status?.done !== undefined) return 2;
+    return 0;
 }
 
 export async function getObligationsByParticipantFromPools(
@@ -546,28 +776,21 @@ export async function getObligationsByParticipantFromPools(
         const obligationsData = await program.account.obligation.fetchMultiple(chunk);
 
         // 3. Фильтруем данные: оставляем только те, где участник — отправитель или получатель
-        obligationsData.forEach((acc: any, index: number) => {
+        obligationsData.forEach((acc, index: number) => {
             if (!acc) return
 
             if (acc.from.equals(participantKey) || acc.to.equals(participantKey)) {
-                let status = ObligationStatus.Created;
-                if (acc.status.created) status = ObligationStatus.Created;
-                else if (acc.status.netted) status = ObligationStatus.Netted;
-                else if (acc.status.declined) status = ObligationStatus.Declined;
-                else if (acc.status.confirmed) status = ObligationStatus.Confirmed;
-                else if (acc.status.cancelled) status = ObligationStatus.Cancelled;
-
                 const obligation: Obligation = {
                     pda: chunk[index],
-                    status: status,
+                    status: parseObligationStatus(acc.status as AnchorEnum),
                     from: acc.from,
                     to: acc.to,
-                    amount: acc.amount.toNumber(),    // BN -> number
-                    timestamp: acc.timestamp.toNumber(), // BN -> number
-                    sessionId: acc.sessionId,
+                    amount: safeBN(acc.amount),
+                    timestamp: safeBN(acc.timestamp),
+                    sessionId: safeOptionalU64(acc.sessionId),
                     fromCancel: acc.fromCancel,
                     toCancel: acc.toCancel,
-                    poolId: acc.poolId,
+                    poolId: safeBN(acc.poolId),
                     bump: acc.bump,
                 };
 
@@ -653,25 +876,18 @@ export async function getObligationsByParticipant(
             const acc = p.account
 
             const ot = acc.status
-            let obligation_status: ObligationStatus = ObligationStatus.Created
-
-            if (ot?.created !== undefined) obligation_status = ObligationStatus.Created
-            if (ot?.netted !== undefined) obligation_status = ObligationStatus.Netted
-            if (ot?.declined !== undefined) obligation_status = ObligationStatus.Declined
-            if (ot?.confirmed !== undefined) obligation_status = ObligationStatus.Confirmed
-            if (ot?.cancelled !== undefined) obligation_status = ObligationStatus.Cancelled
 
             const obligation: Obligation = {
                 pda: p.publicKey,
-                status: obligation_status,
+                status: parseObligationStatus(ot as AnchorEnum),
                 from: acc.from,
                 to: acc.to,
-                amount: Number(acc.amount.toString()),
-                timestamp: acc.timestamp.toNumber(),  // 👈 BN → number
-                sessionId: acc.sessionId,
+                amount: safeBN(acc.amount),
+                timestamp: safeBN(acc.timestamp),
+                sessionId: safeOptionalU64(acc.sessionId),
                 fromCancel: acc.fromCancel,
                 toCancel: acc.toCancel,
-                poolId: acc.poolId,
+                poolId: safeBN(acc.poolId),
                 bump: acc.bump,
             }
 
@@ -690,7 +906,7 @@ export async function getAllBills(
 
     const bills: Bill[] = accounts.map(({ account, publicKey }) => ({
         pda: publicKey,
-        status: account.status,
+        status: parseNetPositionStatus(account.status as AnchorEnum),
         session_id: safeBN(account.sessionId),
         creditor: account.creditor,
         debitor: account.debitor,
@@ -705,38 +921,45 @@ export async function getBillsByParticipant(
     program: Program<ClearingSolana>,
     pubkey: PublicKey
 ): Promise<Bill[]> {
-    const pubkeyBase58 = pubkey.toBase58()
+    const [statePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const state = await program.account.clearingState.fetch(statePda);
+    const totalSessions = safeBN(state.totalSessions);
+    if (totalSessions === 0) return [];
 
-    const [fromPositions, toPositions] = await Promise.all([
-        // where from == pubkey
-        program.account.netPosition.all([
-            {
-                memcmp: {
-                    offset: 17,
-                    bytes: pubkeyBase58,
-                },
-            },
-        ]),
+    const positionPdas: PublicKey[] = [];
+    for (let sessionId = 1; sessionId <= totalSessions; sessionId += 1) {
+        const [sessionPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("session"), new BN(sessionId).toArrayLike(Buffer, "le", 8)],
+            program.programId
+        );
+        const [positionPda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("position"), sessionPda.toBuffer(), pubkey.toBuffer()],
+            program.programId
+        );
+        positionPdas.push(positionPda);
+    }
 
-        // where to == pubkey
-        program.account.netPosition.all([
-            {
-                memcmp: {
-                    offset: 81,
-                    bytes: pubkeyBase58,
-                },
-            },
-        ]),
-    ])
+    const bills: Bill[] = [];
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < positionPdas.length; i += CHUNK_SIZE) {
+        const chunk = positionPdas.slice(i, i + CHUNK_SIZE);
+        const accounts = await program.account.netPosition.fetchMultiple(chunk);
+        accounts.forEach((acc, idx) => {
+            if (!acc) return;
+            bills.push({
+                pda: chunk[idx],
+                status: parseNetPositionStatus(acc.status as AnchorEnum),
+                session_id: safeBN(acc.sessionId),
+                creditor: acc.creditor,
+                debitor: acc.debitor,
+                net_amount: safeBN(acc.netAmount),
+                fee_amount: safeBN(acc.feeAmount),
+            });
+        });
+    }
 
-    // убираем дубликаты (на всякий случай)
-    const map = new Map<string, any>()
-
-        ;[...fromPositions, ...toPositions].forEach(p => {
-            map.set(p.publicKey.toBase58(), p)
-        })
-
-    const bills = Array.from(map.values())
-
-    return bills
+    return bills.sort((a, b) => b.session_id - a.session_id)
 }

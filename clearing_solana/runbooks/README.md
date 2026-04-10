@@ -75,3 +75,14 @@ $ surfpool start --watch
 ```console
 $ surfpool run deployment
 ```
+
+### Optional: airdrop to specific addresses during `anchor deploy`
+If you deploy with Anchor migrations, you can set:
+
+```console
+AIRDROP_ADDRESSES="addr1,addr2,addr3" AIRDROP_SOL=2 anchor deploy
+```
+
+- `AIRDROP_ADDRESSES`: comma-separated list of recipient public keys.
+- `AIRDROP_SOL`: SOL amount per recipient (default: `2`).
+- On networks without faucet support, airdrop errors are logged and deployment continues.

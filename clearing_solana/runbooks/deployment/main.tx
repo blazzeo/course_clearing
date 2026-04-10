@@ -17,3 +17,8 @@ action "deploy_clearing_solana" "svm::deploy_program" {
     // This will make deployments instantaneous, but is deviating from how the deployments will take place on devnet/mainnet.
     // instant_surfnet_deployment = true
 }
+
+// Optional post-deploy initialization:
+// Use `scripts/init.ts` to perform init + optional multi-address airdrop.
+// Example:
+// AIRDROP_ADDRESSES="addr1,addr2" AIRDROP_SOL=2 ts-node scripts/init.ts

@@ -1,13 +1,10 @@
-use crate::ledger_engine::netting_clearing;
-use crate::models::RawSettlement;
-
 use anchor_lang::AccountDeserialize;
 use chrono::Utc;
 use clearing_solana::{ClearingState, Obligation, ObligationPool, ObligationStatus};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
@@ -36,7 +33,7 @@ pub struct WorkerState {
     pub last_session_result: NettingSessionResult,
     pub interval: u64,
     pub session_id: u64,
-    pub solana_client: RpcClient,
+    pub solana_client: Arc<RpcClient>,
 }
 
 impl WorkerState {
@@ -59,7 +56,7 @@ impl WorkerState {
             },
             interval: clearing_state.session_interval_time,
             session_id: clearing_state.total_sessions,
-            solana_client: client,
+            solana_client: Arc::new(client),
         })
     }
 }
@@ -109,13 +106,17 @@ impl CronWorker {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let _ = self.perform_clearing().await;
+                    if let Err(err) = self.perform_clearing().await {
+                        tracing::error!("Scheduled clearing session failed: {err:?}");
+                    }
                 }
 
                 cmd = self.receiver.recv() => {
                     match cmd {
                         Some(WorkerCommand::RunInstant(respond_to)) => {
-                            let _ = self.perform_clearing().await;
+                            if let Err(err) = self.perform_clearing().await {
+                                tracing::error!("Manual clearing session failed: {err:?}");
+                            }
                             let _ = respond_to.send(());
                         }
 
@@ -133,67 +134,25 @@ impl CronWorker {
         }
     }
 
-    async fn get_last_session_timestamp(&self) -> anyhow::Result<i64> {
-        let (pda, _bump) = ClearingState::pda();
-        let pda = Pubkey::new_from_array(pda.to_bytes());
-
-        let s = self.state.read().await;
-        let client = &s.solana_client;
-
-        match get_account::<ClearingState>(&client, pda).await {
-            Ok(state_account) => Ok(state_account.last_session_timestamp),
-            Err(e) => {
-                tracing::error!("Can't get clearing_state account data");
-                Err(e)
-            }
-        }
-    }
-
-    fn parse_obligations(obligations: Vec<(Pubkey, Obligation)>) -> (Vec<Pubkey>, Vec<i64>) {
-        // Run netting algo
-        // 2. Считаем net-сальдо
-        let mut net: HashMap<Pubkey, i128> = HashMap::new();
-
-        for (_pda, obligation) in &obligations {
-            *net.entry(Pubkey::new_from_array(obligation.from.to_bytes()))
-                .or_insert(0) -= obligation.amount as i128;
-
-            *net.entry(Pubkey::new_from_array(obligation.to.to_bytes()))
-                .or_insert(0) += obligation.amount as i128;
-        }
-
-        // Фильтр 0
-        let mut participants = Vec::new();
-        let mut amounts = Vec::new();
-
-        for (addr, amt) in net {
-            if amt != 0 {
-                participants.push(addr);
-                amounts.push(amt as i64);
-            }
-        }
-
-        (participants, amounts)
-    }
-
     /// Инкапсулированная логика одной сессии (Single Responsibility)
     async fn perform_clearing(&self) -> anyhow::Result<()> {
-        let (sid, all_obligations) = {
+        let (sid, client) = {
             let s = self.state.read().await;
-            let all_obligations = Self::collect_obligations(&s.solana_client).await;
-            (s.session_id, all_obligations) // Клонируем клиент (это дешево в Solana RPC)
+            (s.session_id, s.solana_client.clone())
         };
+        let all_obligations = Self::collect_obligations(client.as_ref()).await;
 
         tracing::info!("[Clearing session № {} started!]", sid);
 
-        // Сбор и парсинг
-        let (participants, amounts) = Self::parse_obligations(all_obligations.clone());
-
-        // Неттинг
-        let settlements = netting_clearing(&participants, &amounts)
-            .map_err(|e| anyhow::anyhow!("Netting error: {}", e))?;
-
-        let allocations = Self::allocate_settlements(settlements, &all_obligations);
+        // IMPORTANT:
+        // On-chain create_position processes a whole obligation account (full amount),
+        // not a partial allocated amount. Returning partial backend allocations causes
+        // mismatches and incorrect clearing amounts.
+        let mut allocations: Vec<(Pubkey, u64)> = all_obligations
+            .iter()
+            .map(|(pda, obligation)| (*pda, obligation.amount))
+            .collect();
+        allocations.sort_by_key(|(_, amount)| *amount);
 
         // Сохранение результата
         {
@@ -213,64 +172,6 @@ impl CronWorker {
 
         tracing::info!("[Clearing session № {} finished!]", sid);
         Ok(())
-    }
-
-    fn allocate_settlements(
-        settlements: Vec<RawSettlement>,
-        obligations: &Vec<(Pubkey, Obligation)>,
-    ) -> Vec<(Pubkey, u64)> {
-        let mut result = vec![];
-
-        // 🔥 трекаем остаток по каждой obligation
-        let mut remaining_map: HashMap<Pubkey, u64> = obligations
-            .iter()
-            .map(|(pda, o)| (*pda, o.amount))
-            .collect();
-
-        for s in settlements {
-            let mut remaining = s.amount;
-
-            // находим все obligation между from → to
-            let mut relevant: Vec<_> = obligations
-                .iter()
-                .filter(|(_, o)| {
-                    Pubkey::new_from_array(o.from.to_bytes()) == s.from_address
-                        && Pubkey::new_from_array(o.to.to_bytes()) == s.to_address
-                })
-                .collect();
-
-            relevant.sort_by_key(|(_, o)| o.timestamp);
-
-            for (pda, _) in relevant {
-                if remaining == 0 {
-                    break;
-                }
-
-                let available = *remaining_map.get(pda).unwrap_or(&0);
-
-                if available == 0 {
-                    continue;
-                }
-
-                let used = std::cmp::min(available, remaining);
-
-                result.push((*pda, used));
-
-                // 🔥 обновляем остаток obligation
-                remaining_map.insert(*pda, available - used);
-
-                remaining -= used;
-            }
-        }
-
-        result
-    }
-
-    /// Метод для мгновенного вызова сессии (например, из API)
-    /// Теперь он просто делает атомарную работу, не ломая основной цикл
-    pub async fn instant_session_manual(&self) {
-        tracing::info!("Manual instant session requested.");
-        let _ = self.perform_clearing().await;
     }
 
     async fn collect_obligations(client: &RpcClient) -> Vec<(Pubkey, Obligation)> {

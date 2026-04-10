@@ -1,7 +1,7 @@
 // providers/SimplePositionsProvider.tsx
 import { createContext, useContext, useState, ReactNode } from "react";
 import { Participant } from "../interfaces";
-import { getParticipant } from "../api";
+import { getParticipant, getParticipantPda } from "../api";
 import { Program } from "@coral-xyz/anchor";
 import { ClearingSolana } from "../clearing_solana";
 import { PublicKey } from "@solana/web3.js";
@@ -33,7 +33,8 @@ export function ParticipantProvider({ children, program, publicKey }: Participan
 
         setIsLoading(true);
         try {
-            const data = await getParticipant(program, publicKey)
+            const participantPda = getParticipantPda(program.programId, publicKey);
+            const data = await getParticipant(program, participantPda)
             setParticipant(data);
         } catch (error) {
             console.error(error);

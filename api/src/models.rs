@@ -13,6 +13,10 @@ pub struct RawSettlement {
 pub struct AdminSignedRequest {
     pub message: String,
     pub signature: String,
+    #[serde(default)]
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

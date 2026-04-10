@@ -15,7 +15,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 import { UserRoleProvider } from './providers/UserTypeProvider.tsx'
 
 export const RPC_URL: string = import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
-export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+export const API_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

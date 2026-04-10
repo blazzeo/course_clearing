@@ -2,26 +2,15 @@ FROM rust:1.91 as builder
 
 WORKDIR /app
 
-# Копируем файлы зависимостей
-COPY Cargo.toml ./
-COPY Cargo.lock* ./
+# Build with repository root as context:
+# - /app/api
+# - /app/clearing_solana
+COPY api ./api
+COPY clearing_solana ./clearing_solana
 
-# Создаем фиктивный src для кеширования зависимостей
-RUN mkdir src && echo "fn main() {println!(\"Hello\");}" > src/main.rs
-
-# Собираем зависимости (кешируется)
-RUN cargo build --release
-RUN rm src/main.rs
-
-# Копируем реальный код
-COPY . .
-
-RUN touch src/main.rs
-
-# Собираем приложение
+WORKDIR /app/api
 RUN cargo build --release
 
-# Финальный образ
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -30,13 +19,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+COPY --from=builder /app/api/target/release/clearing-api /app/clearing-api
 
-COPY --from=builder /app/target/release/clearing-api /app/clearing-api
-
-RUN ls -la /app
-
-EXPOSE 8080
-
+EXPOSE 3001
 CMD ["./clearing-api"]
 
 

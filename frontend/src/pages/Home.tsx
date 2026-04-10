@@ -42,17 +42,14 @@ export default function Home() {
                 <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
                     {userRole === UserType.Counterparty && (
                         <>
-                            <Link to="/positions/create" className="btn btn-primary">
+                            <Link to="/obligations/create" className="btn btn-primary">
                                 Создать позицию
                             </Link>
-                            <Link to="/positions" className="btn btn-secondary">
+                            <Link to="/obligations" className="btn btn-secondary">
                                 Мои позиции
                             </Link>
                             <Link to="/bills" className="btn btn-secondary">
                                 Мои счета
-                            </Link>
-                            <Link to="/funds" className="btn btn-secondary">
-                                Управление средствами
                             </Link>
                         </>
                     )}

@@ -57,6 +57,11 @@ pub mod clearing_solana {
         let clock = Clock::get()?;
 
         require!(from != to, ObligationError::FromToEquals);
+        // Creator of obligation is creditor (`to`), debtor is `from`.
+        require!(
+            ctx.accounts.authority.key() == to,
+            CustomErrors::Unauthorized
+        );
 
         let obligation = &mut ctx.accounts.new_obligation;
         obligation.status = ObligationStatus::Created;
@@ -99,6 +104,7 @@ pub mod clearing_solana {
     }
 
     /// Method to decline obligation if 'from participant' disagree with conditions
+    #[allow(unused_variables)]
     pub fn decline_obligation(
         ctx: Context<DeclineObligation>,
         from: Pubkey,
@@ -131,6 +137,7 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     pub fn create_position(
         ctx: Context<CreatePosition>,
         from: Pubkey,
@@ -169,11 +176,17 @@ pub mod clearing_solana {
         let from_pos = &mut ctx.accounts.from_position;
         from_pos.net_amount = from_pos
             .net_amount
-            .checked_sub(obligation.amount)
+            .checked_add(obligation.amount)
             .ok_or(CustomErrors::MathOverflow)?;
+        if from_pos.status == NetPositionStatus::None {
+            from_pos.session_id = session_id;
+            from_pos.debitor = obligation.from;
+            from_pos.creditor = obligation.to;
+            from_pos.bump = ctx.bumps.from_position;
+        }
 
         //  Calculate new add fee and update total fee
-        let add_fee_amount = state.calculate_fee(obligation.amount);
+        let add_fee_amount = state.calculate_fee(obligation.amount)?;
         from_pos.fee_amount = from_pos
             .fee_amount
             .checked_add(add_fee_amount)
@@ -185,6 +198,12 @@ pub mod clearing_solana {
             .net_amount
             .checked_add(obligation.amount)
             .ok_or(CustomErrors::MathOverflow)?;
+        if to_pos.status == NetPositionStatus::None {
+            to_pos.session_id = session_id;
+            to_pos.debitor = obligation.from;
+            to_pos.creditor = obligation.to;
+            to_pos.bump = ctx.bumps.to_position;
+        }
 
         session.processed_count = session
             .processed_count
@@ -199,6 +218,10 @@ pub mod clearing_solana {
 
         let session = &mut ctx.accounts.session;
         let state = &mut ctx.accounts.state;
+        require!(
+            session.status == ClearingSessionStatus::Open,
+            ClearingError::InvalidSessionStatus
+        );
 
         session.status = ClearingSessionStatus::Closed;
         session.closed_at = clock.unix_timestamp;
@@ -212,6 +235,10 @@ pub mod clearing_solana {
         total_obligations: u32,
     ) -> Result<()> {
         let clock = Clock::get()?;
+        require!(
+            ctx.accounts.state.super_admin == Some(ctx.accounts.authority.key()),
+            CustomErrors::Unauthorized
+        );
 
         // Increment session_id
         let state = &mut ctx.accounts.state;
@@ -239,6 +266,10 @@ pub mod clearing_solana {
     /// Only after his confirmation to pay for pool this method is invoked
     pub fn create_new_pool(ctx: Context<CreateNewPool>, last_pool_id: u32) -> Result<()> {
         let clock = Clock::get()?;
+        require!(
+            ctx.accounts.state.super_admin == Some(ctx.accounts.authority.key()),
+            CustomErrors::Unauthorized
+        );
 
         let last_pool = &mut ctx.accounts.last_pool;
 
@@ -264,6 +295,10 @@ pub mod clearing_solana {
 
     /// Method to create pool manager(dispatcher)
     pub fn create_pool_manager(ctx: Context<CreatePoolManager>) -> Result<()> {
+        require!(
+            ctx.accounts.state.super_admin == Some(ctx.accounts.authority.key()),
+            CustomErrors::Unauthorized
+        );
         let root_pool = &mut ctx.accounts.root_pool;
         root_pool.id = 0;
         root_pool.authority = ctx.accounts.authority.key();
@@ -301,6 +336,7 @@ pub mod clearing_solana {
 
     /// Method to register new participant
     /// NameBytes is actual username and NameHash is just for PDA calculation
+    #[allow(unused_variables)]
     pub fn register_participant(
         ctx: Context<RegisterParticipant>,
         name_hash: [u8; 32],
@@ -339,6 +375,7 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     pub fn settle_position(
         ctx: Context<SettlePosition>,
         session_id: u64,
@@ -352,6 +389,14 @@ pub mod clearing_solana {
         require!(
             net_position.status == NetPositionStatus::FeePaid,
             SettlePositionError::FeeNotPaid
+        );
+        require!(
+            net_position.session_id == session_id,
+            SettlePositionError::SessionIdMismatch
+        );
+        require!(
+            ctx.accounts.recipient.key() == to,
+            SettlePositionError::InvalidRecipient
         );
         require!(amount > 0, SettlePositionError::InvalidAmount);
         require!(obligation.amount >= amount, SettlePositionError::Overpay);
@@ -371,9 +416,18 @@ pub mod clearing_solana {
         let clock = Clock::get()?;
 
         if amount < obligation.amount {
-            obligation.amount -= amount;
+            obligation.amount = obligation
+                .amount
+                .checked_sub(amount)
+                .ok_or(CustomErrors::MathOverflow)?;
             obligation.status = ObligationStatus::PartiallyNetted;
-            net_position.status = NetPositionStatus::Done;
+            net_position.net_amount = net_position
+                .net_amount
+                .checked_sub(amount)
+                .ok_or(CustomErrors::MathOverflow)?;
+            if net_position.net_amount == 0 {
+                net_position.status = NetPositionStatus::Done;
+            }
 
             emit!(PositionPartialySettled {
                 position: net_position.key(),
@@ -384,10 +438,8 @@ pub mod clearing_solana {
         } else {
             obligation.amount = 0;
             obligation.status = ObligationStatus::Netted;
+            net_position.net_amount = 0;
             net_position.status = NetPositionStatus::Done;
-
-            let pool = &mut ctx.accounts.pool;
-            pool.remove_obligation(obligation.key())?;
 
             emit!(PositionSettled {
                 position: net_position.key(),
@@ -401,6 +453,7 @@ pub mod clearing_solana {
     }
 
     /// Method to get configrmation by 'from participant' (the one that will have to pay obligation).
+    #[allow(unused_variables)]
     pub fn confirm_obligation(
         ctx: Context<ConfirmObligation>,
         from: Pubkey,
@@ -483,6 +536,7 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     pub fn update_participant_last_session_id(
         ctx: Context<UpdateParticipantLastSessionId>,
         participant: Pubkey,
@@ -503,6 +557,7 @@ pub mod clearing_solana {
 
     /// Method to change user's type
     /// Can only be invoked by admin
+    #[allow(unused_variables)]
     pub fn update_user_type(
         ctx: Context<UpdateUserType>,
         participant: Pubkey,
@@ -532,6 +587,10 @@ pub mod clearing_solana {
         let escrow = &mut ctx.accounts.escrow;
         let participant = &mut ctx.accounts.participant;
         let net_position = &mut ctx.accounts.net_position;
+        require!(
+            net_position.session_id == session_id,
+            PayFeeError::SessionIdMismatch
+        );
 
         require!(net_position.fee_amount > 0, PayFeeError::InvalidFeeAccount);
 
@@ -626,6 +685,7 @@ pub mod clearing_solana {
     /// Method must be called by both participants of obligation.
     /// Each will interact only with his 'cancel flag'.
     /// When both flags are true - only then obligation is considered as 'Canceled'.
+    #[allow(unused_variables)]
     pub fn cancel_obligation(
         ctx: Context<CancelObligation>,
         from: Pubkey,
@@ -645,6 +705,11 @@ pub mod clearing_solana {
         );
 
         let authority = ctx.accounts.authority.key();
+        require!(
+            authority == ctx.accounts.to_participant.authority
+                || authority == ctx.accounts.from_participant.authority,
+            CancelObligationError::Unauthorized
+        );
 
         //  Cancel by 'to_participant'
         if authority == ctx.accounts.to_participant.authority {
@@ -718,7 +783,7 @@ pub struct PayFee<'info> {
 
     #[account(
         mut,
-        seeds = [b"position", session.key().as_ref(), participant.key().as_ref()],
+        seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
         bump,
         constraint = net_position.status != NetPositionStatus::FeePaid @ PayFeeError::AlreadyPaid,
     )]
@@ -1132,8 +1197,12 @@ impl ClearingState {
         self.fee_rate_bps as f64 / 100.0
     }
 
-    pub fn calculate_fee(&self, amount: u64) -> u64 {
-        amount * self.fee_rate_bps / 10000
+    pub fn calculate_fee(&self, amount: u64) -> Result<u64> {
+        amount
+            .checked_mul(self.fee_rate_bps)
+            .ok_or(CustomErrors::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CustomErrors::MathOverflow.into())
     }
 }
 
@@ -1483,9 +1552,7 @@ pub struct FinalizeClearingSession<'info> {
     pub state: Account<'info, ClearingState>,
 
     #[account(
-        init,
-        payer = authority,
-        space = 8 + ClearingSession::LEN,
+        mut,
         seeds = [b"session", state.total_sessions.to_le_bytes().as_ref()],
         bump
     )]
@@ -1493,7 +1560,6 @@ pub struct FinalizeClearingSession<'info> {
 
     #[account(mut)]
     pub authority: Signer<'info>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1523,6 +1589,12 @@ pub struct StartClearingSession<'info> {
 #[instruction(last_pool_id: u32)]
 pub struct CreateNewPool<'info> {
     #[account(
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
+
+    #[account(
         seeds = [b"pool", &last_pool_id.to_le_bytes()],
         bump,
         constraint = last_pool.next_pool.is_none() @  CreateNewPoolError::PoolNotLast
@@ -1546,6 +1618,12 @@ pub struct CreateNewPool<'info> {
 
 #[derive(Accounts)]
 pub struct CreatePoolManager<'info> {
+    #[account(
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
+
     #[account(
         init,
         payer = authority,
@@ -1687,7 +1765,7 @@ pub struct SettlePosition<'info> {
         seeds = [b"pool", &obligation.pool_id.to_le_bytes()],
         bump
     )]
-    pub pool: Account<'info, ObligationPool>,
+    pub pool: Box<Account<'info, ObligationPool>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -1702,10 +1780,12 @@ pub struct SettlePosition<'info> {
 #[error_code]
 pub enum SettlePositionError {
     FeeNotPaid,
+    SessionIdMismatch,
     NoNeedInPayment,
     ZeroPosition,
     Overpay,
     InvalidAmount,
+    InvalidRecipient,
 }
 
 #[derive(Accounts)]

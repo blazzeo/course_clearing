@@ -13,12 +13,32 @@ pub fn verify(public_key: &str, message: &str, signature: &str) -> bool {
         Err(_) => return false,
     };
 
-    let verifying_key = match VerifyingKey::from_bytes(&public_key_bytes.try_into().unwrap()) {
+    let public_key_arr: [u8; 32] = match public_key_bytes.as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return false,
+    };
+    let signature_arr: [u8; 64] = match signature_bytes.as_slice().try_into() {
+        Ok(arr) => arr,
+        Err(_) => return false,
+    };
+
+    let verifying_key = match VerifyingKey::from_bytes(&public_key_arr) {
         Ok(pk) => pk,
         Err(_) => return false,
     };
 
-    let signature = Signature::from_bytes(&signature_bytes.try_into().unwrap());
+    let signature = Signature::from_bytes(&signature_arr);
 
     verifying_key.verify(message.as_bytes(), &signature).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify;
+
+    #[test]
+    fn verify_rejects_invalid_key_and_signature_sizes() {
+        let ok = verify("abc", "clear", "Zm9v");
+        assert!(!ok);
+    }
 }

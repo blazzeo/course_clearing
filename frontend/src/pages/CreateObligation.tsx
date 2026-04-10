@@ -26,7 +26,6 @@ export default function CreateObligation() {
             return
         }
 
-        // TODO: Fix this
         try {
             setLoading(true)
             const amountLamports = parseFloat(amount) * 1e9
@@ -37,11 +36,10 @@ export default function CreateObligation() {
 
             let pool_id = 0;
             let free_pool_found = false
-            let new_pool_found = false
 
             // loop until we find free pool
             // or fetch pools until we find free pool
-            while (!free_pool_found && !new_pool_found) {
+            while (!free_pool_found) {
                 const pool_pda = getPoolPda(program, pool_id);
 
                 const pool = await getPool(program, pool_pda);
@@ -54,8 +52,7 @@ export default function CreateObligation() {
 
                 //	No pool found -> Need to create new pool
                 if (!pool) {
-                    free_pool_found = true
-                    break
+                    throw new Error('Свободный пул не найден. Обратитесь к администратору для создания нового пула.')
                 }
 
                 pool_id++
@@ -67,6 +64,7 @@ export default function CreateObligation() {
                 console.log("checking pool", pool_id)
             }
 
+            // Creator is creditor (`to`) and will receive funds.
             const tx = await registerObligation(program, counterPartyPubkey, publicKey, amountLamports, pool_id, timestamp);
 
             const latestBlockhash = await program.provider.connection.getLatestBlockhash();

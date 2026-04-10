@@ -1,18 +1,43 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: clearing
+      POSTGRES_PASSWORD: clearing
+      POSTGRES_DB: clearing
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clearing -d clearing"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   api:
     image: clearing-api
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     container_name: api
     environment:
-      SOLANA_RPC_URL: http://127.0.0.1:8899
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-http://solana-localnet:8899}
+      SOLANA_WS_URL: ${SOLANA_WS_URL:-ws://solana-localnet:8900}
+      DATABASE_URL: ${DATABASE_URL:-postgres://clearing:clearing@postgres:5432/clearing}
+      ADMIN_PUBKEY: ${ADMIN_PUBKEY:-11111111111111111111111111111111}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       RUST_LOG: info
       PORT: 3001
     ports:
       - "3001:3001"
     depends_on:
-      - solana-localnet
+      postgres:
+        condition: service_healthy
+      solana-localnet:
+        condition: service_started
     restart: unless-stopped
     profiles:
       - all
@@ -23,19 +48,21 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+        VITE_SOLANA_RPC_URL: /solana
     container_name: gateway
-    environment:
-        VITE_API_URL: http://localhost:3001/api
-        VITE_SOLANA_RPC_URL: http://127.0.0.1:8899
     ports:
       - "3000:80"
     volumes:
-      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # - /dev/null:/etc/nginx/conf.d/default.conf
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - api
       - solana-localnet
     restart: unless-stopped
+    profiles:
+      - all
+      - frontend
 
   solana-localnet:
     build:
@@ -43,11 +70,17 @@ services:
       dockerfile: Dockerfile
     container_name: solana-localnet
     volumes:
-      - ./program:/app
-      - /home/user/.config/solana/id.json:/root/.config/solana
-    entrypoint: /bin/bash
-    tty: true
+      - solana-data:/tmp/test-ledger
+    command: solana-test-validator --reset --ledger /tmp/test-ledger --rpc-port 8899 --dynamic-port-range 8900-8920 --bind-address 0.0.0.0 --quiet
+    healthcheck:
+      test: ["CMD-SHELL", "solana -u http://127.0.0.1:8899 cluster-version >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     restart: unless-stopped
+    profiles:
+      - all
+      - solana
 
 volumes:
   postgres_data:

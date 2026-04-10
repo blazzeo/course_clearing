@@ -17,6 +17,12 @@ export default function Profile() {
     const [blockchainInitializing, setBlockchainInitializing] = useState(false)
     const [registrationName, setRegistrationName] = useState('')
 
+    const toDisplayDate = (ts?: number | null): string => {
+        if (!ts) return 'Неизвестно';
+        const tsMs = ts < 1_000_000_000_000 ? ts * 1000 : ts;
+        return new Date(tsMs).toLocaleString();
+    };
+
     useEffect(() => {
         if (!publicKey || !program) return
         loadProfile()
@@ -182,17 +188,13 @@ export default function Profile() {
                         <div>
                             <p className="profile_label">Дата регистрации</p>
                             <p>
-                                {profile.registrationTimestamp
-                                    ? new Date(profile.registrationTimestamp).toLocaleString()
-                                    : 'Неизвестно'}
+                                {toDisplayDate(profile.registrationTimestamp)}
                             </p>
                         </div>
                         <div>
                             <p className="profile_label">Обновлено</p>
                             <p>
-                                {profile.updateTimestamp
-                                    ? new Date(profile.updateTimestamp).toLocaleString()
-                                    : 'Не обновлялось'}
+                                {toDisplayDate(profile.updateTimestamp)}
                             </p>
                         </div>
                     </div>

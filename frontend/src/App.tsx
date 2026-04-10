@@ -16,7 +16,7 @@ import { Route, Routes } from 'react-router-dom'
 
 import { useWallet } from '@solana/wallet-adapter-react'
 import '@solana/wallet-adapter-react-ui/styles.css';
-import { getParticipantPda, getUserRole, useProgram } from './api'
+import { getUserRole, useProgram } from './api'
 import { UserType } from './interfaces'
 import { AppProviders } from './providers/BlockchainProviders'
 import { useUserRole } from './providers/UserTypeProvider'
@@ -30,7 +30,7 @@ function App() {
 
     useEffect(() => {
         authenticateUser()
-    }, [publicKey]);
+    }, [publicKey, program]);
 
     const authenticateUser = async () => {
         if (!publicKey || !program) {
@@ -38,10 +38,8 @@ function App() {
             return;
         }
 
-        const pda = getParticipantPda(program.programId, publicKey)
-
         try {
-            const participant_role = await getUserRole(program, pda);
+            const participant_role = await getUserRole(program, publicKey);
 
             setUserRole(participant_role)
         } catch (error) {
@@ -97,16 +95,6 @@ function App() {
                             userRole={userRole}
                         >
                             <Bills />
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/funds" element={
-                        <ProtectedRoute
-                            requiredRoles={[UserType.Counterparty]}
-                            resource="/funds"
-                            requireWallet={true}
-                            userRole={userRole}
-                        >
-                            <Funds />
                         </ProtectedRoute>
                     } />
 

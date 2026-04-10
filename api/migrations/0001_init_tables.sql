@@ -22,7 +22,7 @@ CREATE TABLE settlements (
     session_id BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
 
-    FOREIGN KEY (obligation_id) REFERENCES obligations(id)
+    FOREIGN KEY (obligation_id) REFERENCES obligations(pda)
 );
 
 CREATE TABLE events (

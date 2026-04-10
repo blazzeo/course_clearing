@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-import { getAllParticipants, getClearingState, getUserRole, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
+import { buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
 import { Participant, UserType, UserTypeToString } from '../interfaces'
 import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
 
 const SECONDS_IN_DAY = 24 * 3600;
+const FRESH_RESULT_TTL_SECONDS = 300;
 
 export interface SystemSetting {
     key: string,
@@ -40,6 +41,15 @@ function formatTimeExtended(seconds: number): string {
 }
 
 export default function AdminPanel() {
+    interface ClearingApiResponse {
+        success: boolean;
+        data?: {
+            data: { obligation: string; amount: number }[];
+            timestamp: number;
+        };
+        error?: string;
+    }
+
     const [allUsers, setAllUsers] = useState<Participant[]>([])
     const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([])
     const [loading, setLoading] = useState(true)
@@ -51,13 +61,22 @@ export default function AdminPanel() {
     const [newIntervalTime, setNewIntervalTime] = useState<number>(0)
     const [withdrawFeeAmount, setWithdrawFeeAmount] = useState<number>(0)
     const [escrowBalance, setEscrowBalance] = useState<number>(0)
+    const [poolStats, setPoolStats] = useState<{
+        totalPools: number;
+        totalSlots: number;
+        occupiedSlots: number;
+        freeSlots: number;
+    } | null>(null)
+    const [poolStatsLoading, setPoolStatsLoading] = useState(false)
+    const [lastHandledResultTimestamp, setLastHandledResultTimestamp] = useState<number | null>(null)
 
-    const { publicKey, signMessage } = useWallet()
+    const { publicKey, signMessage, signAllTransactions } = useWallet()
     const program = useProgram()
 
     useEffect(() => {
         checkAdminStatus()
         getEscrowBalance()
+        loadPoolStats()
     }, [publicKey])
 
     const checkAdminStatus = async () => {
@@ -79,7 +98,87 @@ export default function AdminPanel() {
         }
     }
 
-    //	TODO: fix clearing response logic
+    const signAdminRequest = async () => {
+        if (!publicKey || !signMessage) {
+            throw new Error("Кошелек не найден")
+        }
+        const timestamp = Math.floor(Date.now() / 1000);
+        const nonce = `${publicKey.toBase58()}-${timestamp}-${crypto.randomUUID()}`;
+        const message = `clear:${timestamp}:${nonce}`;
+        const encodedMessage = new TextEncoder().encode(message);
+        const signature = await signMessage(encodedMessage);
+        const signatureBase64 = btoa(String.fromCharCode(...signature));
+        return { message, signature: signatureBase64, nonce, timestamp };
+    }
+
+    const isResultFresh = (ts: number): boolean => {
+        const now = Math.floor(Date.now() / 1000);
+        return Math.abs(now - ts) <= FRESH_RESULT_TTL_SECONDS;
+    }
+
+    const executeOnChainAllocations = async (allocations: { obligation: string; amount: number }[]) => {
+        if (!publicKey || !program) {
+            throw new Error("Кошелек не найден")
+        }
+        if (signAllTransactions) {
+            const state = await getClearingState(program);
+            const nextSessionId = state.total_sessions + 1;
+            const txs = [];
+            txs.push(await buildStartClearingSessionTx(program, allocations.length));
+            for (const item of allocations) {
+                txs.push(
+                    await buildCreatePositionByObligationTx(
+                        program,
+                        new PublicKey(item.obligation),
+                        nextSessionId
+                    )
+                );
+            }
+            txs.push(await buildFinalizeClearingSessionTx(program, nextSessionId));
+
+            const latest = await program.provider.connection.getLatestBlockhash();
+            txs.forEach((tx) => {
+                tx.feePayer = publicKey;
+                tx.recentBlockhash = latest.blockhash;
+            });
+
+            const signed = await signAllTransactions(txs);
+            for (const tx of signed) {
+                const sig = await program.provider.connection.sendRawTransaction(tx.serialize());
+                await program.provider.connection.confirmTransaction(
+                    { signature: sig, ...latest },
+                    "confirmed"
+                );
+            }
+        } else {
+            await startClearingSession(program, allocations.length);
+            for (const item of allocations) {
+                await createPositionByObligation(
+                    program,
+                    new PublicKey(item.obligation)
+                );
+            }
+            await finalizeClearingSession(program);
+        }
+    }
+
+    const fetchClearingResult = async (endpoint: "run" | "last"): Promise<ClearingApiResponse["data"]> => {
+        const payload = await signAdminRequest();
+        const res = await axios.post<ClearingApiResponse>(
+            `${API_URL}/clearing/${endpoint}`,
+            payload,
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+        if (!res.data.success || !res.data.data) {
+            throw new Error(res.data.error || "Clearing API returned empty response");
+        }
+        return res.data.data;
+    }
+
     const executeClearingHandler = async () => {
         if (!publicKey || !program || !signMessage) {
             toast.error("Кошелек не найден")
@@ -89,36 +188,56 @@ export default function AdminPanel() {
         try {
             setActionLoading(true)
 
-            const message = "clear";
-            const encodedMessage = new TextEncoder().encode(message);
+            const result = await fetchClearingResult("run");
+            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
+                toast.info("Новой сессии не было");
+                return;
+            }
+            if (!isResultFresh(result.timestamp)) {
+                toast.warn("Результат клиринга устарел. Запусти клиринг повторно.");
+                return;
+            }
+            await executeOnChainAllocations(result.data);
+            setLastHandledResultTimestamp(result.timestamp);
 
-            const signature = await signMessage(encodedMessage);
-
-            console.log("Signature:", signature);
-
-            const signatureBase64 = btoa(
-                String.fromCharCode(...signature)
-            );
-
-            console.log({ message: message, signature: signatureBase64 });
-
-            let res = await axios.post(
-                `${API_URL}/api/clearing/run`,
-                {
-                    message,
-                    signature: signatureBase64,
-                },
-                {
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                }
-            );
-
-            console.log(res)
+            toast.success(`Клиринг завершен. Обработано обязательств: ${result.data.length}`);
         } catch (error) {
             console.error('Error executing clearing:', error)
             toast.error('Ошибка при проведении операции')
+        } finally {
+            setActionLoading(false)
+        }
+    }
+
+    const executeLastSessionResultHandler = async () => {
+        if (!publicKey || !program || !signMessage) {
+            toast.error("Кошелек не найден")
+            return
+        }
+
+        try {
+            setActionLoading(true)
+            const result = await fetchClearingResult("last");
+
+            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
+                toast.info("Новой сессии не было");
+                return;
+            }
+            if (!result.data.length) {
+                toast.info("Новой сессии не было");
+                return;
+            }
+            if (!isResultFresh(result.timestamp)) {
+                toast.info("Новой сессии не было");
+                return;
+            }
+
+            await executeOnChainAllocations(result.data);
+            setLastHandledResultTimestamp(result.timestamp);
+            toast.success(`Обработан последний результат сессии. Обязательств: ${result.data.length}`);
+        } catch (error) {
+            console.error('Error executing last session result:', error)
+            toast.error('Ошибка при обработке последнего результата')
         } finally {
             setActionLoading(false)
         }
@@ -247,6 +366,90 @@ export default function AdminPanel() {
             console.error("Ошибка при получении данных эскроу:", error);
             // Если аккаунт еще не создан (не было ни одной сделки), fetch выдаст ошибку
             setEscrowBalance(0);
+        }
+    }
+
+    const getLastPoolId = async (): Promise<number> => {
+        if (!program) throw new Error("Program is not initialized")
+
+        let poolId = 0;
+        while (true) {
+            const poolPda = getPoolPda(program, poolId);
+            const pool = await getPool(program, poolPda);
+            if (!pool) {
+                if (poolId === 0) {
+                    throw new Error("Root pool not found. Create pool manager first.");
+                }
+                return poolId - 1;
+            }
+            poolId += 1;
+            if (poolId > 1024) {
+                throw new Error("Pool scan limit reached");
+            }
+        }
+    }
+
+    const loadPoolStats = async () => {
+        if (!program) return;
+        setPoolStatsLoading(true);
+        try {
+            let poolId = 0;
+            let totalPools = 0;
+            let occupiedSlots = 0;
+            let slotsPerPool = 50; // fallback for UI
+
+            while (true) {
+                const poolPda = getPoolPda(program, poolId);
+                const pool = await getPool(program, poolPda);
+                if (!pool) break;
+
+                totalPools += 1;
+                const occupied = Number(pool.occupiedCount?.toString?.() ?? pool.occupiedCount ?? 0);
+                occupiedSlots += occupied;
+
+                const obligations = pool.obligations as unknown[];
+                if (Array.isArray(obligations) && obligations.length > 0) {
+                    slotsPerPool = obligations.length;
+                }
+
+                poolId += 1;
+                if (poolId > 1024) break;
+            }
+
+            const totalSlots = totalPools * slotsPerPool;
+            const freeSlots = Math.max(totalSlots - occupiedSlots, 0);
+
+            setPoolStats({
+                totalPools,
+                totalSlots,
+                occupiedSlots,
+                freeSlots,
+            });
+        } catch (error) {
+            console.error('Error loading pool stats:', error);
+            setPoolStats(null);
+        } finally {
+            setPoolStatsLoading(false);
+        }
+    }
+
+    const createNewPoolHandler = async () => {
+        if (!publicKey || !program) {
+            toast.error('Кошелёк не найден')
+            return;
+        }
+
+        try {
+            setActionLoading(true)
+            const lastPoolId = await getLastPoolId();
+            await createNewPool(program, lastPoolId);
+            toast.success(`Новый пул #${lastPoolId + 1} создан`);
+            await loadPoolStats();
+        } catch (error) {
+            console.error('Error creating new pool:', error)
+            toast.error('Ошибка при создании нового пула')
+        } finally {
+            setActionLoading(false)
         }
     }
 
@@ -448,8 +651,8 @@ export default function AdminPanel() {
 
                                                         <button
                                                             onClick={() => {
-                                                                if (setting.key === 'Fee Rate Bps') updateFeeRateHandler();
-                                                                if (setting.key === 'Session Interval Time') updateSessionIntervalTimeHandler();
+                                                                if (setting.key === 'Fee Rate (%)') updateFeeRateHandler();
+                                                                if (setting.key === 'Session Interval Time (д)') updateSessionIntervalTimeHandler();
                                                             }}
                                                             disabled={actionLoading}
                                                             style={{
@@ -486,22 +689,40 @@ export default function AdminPanel() {
                                 <p style={{ marginBottom: '16px', color: '#666' }}>
                                     Эта операция проведет неттинг всех подтвержденных позиций и создаст транзакции для расчетов.
                                 </p>
-                                <button
-                                    onClick={executeClearingHandler}
-                                    disabled={actionLoading}
-                                    style={{
-                                        padding: '12px 24px',
-                                        background: actionLoading ? '#ccc' : '#ff9800',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
-                                        fontSize: '16px',
-                                        fontWeight: 'bold'
-                                    }}
-                                >
-                                    {actionLoading ? 'Выполнение клиринга...' : 'Запустить клиринг'}
-                                </button>
+                                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                                    <button
+                                        onClick={executeClearingHandler}
+                                        disabled={actionLoading}
+                                        style={{
+                                            padding: '12px 24px',
+                                            background: actionLoading ? '#ccc' : '#ff9800',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                            fontSize: '16px',
+                                            fontWeight: 'bold'
+                                        }}
+                                    >
+                                        {actionLoading ? 'Выполнение клиринга...' : 'Запустить клиринг'}
+                                    </button>
+                                    <button
+                                        onClick={executeLastSessionResultHandler}
+                                        disabled={actionLoading}
+                                        style={{
+                                            padding: '12px 24px',
+                                            background: actionLoading ? '#ccc' : '#667eea',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                            fontSize: '16px',
+                                            fontWeight: 'bold'
+                                        }}
+                                    >
+                                        {actionLoading ? 'Проверка last result...' : 'Получить last session result'}
+                                    </button>
+                                </div>
                             </div>
 
                             {/* Вывод комиссий */}
@@ -544,6 +765,55 @@ export default function AdminPanel() {
                                     }}
                                 >
                                     {actionLoading ? 'Вывод средств...' : 'Вывести средства'}
+                                </button>
+                            </div>
+
+                            {/* Создание нового пула */}
+                            <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
+                                <h3 style={{ marginBottom: '16px' }}>Создать новый пул обязательств</h3>
+                                <p style={{ marginBottom: '16px', color: '#666' }}>
+                                    Используйте это действие, когда существующие пулы заполнены.
+                                </p>
+                                {poolStatsLoading ? (
+                                    <p style={{ color: '#666', marginBottom: '12px' }}>Загрузка статистики пулов...</p>
+                                ) : poolStats ? (
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '14px', color: '#333' }}>
+                                            <span>Пулы: {poolStats.totalPools}</span>
+                                            <span>Свободно: {poolStats.freeSlots} / {poolStats.totalSlots}</span>
+                                        </div>
+                                        <div style={{ width: '100%', background: '#e9ecef', borderRadius: '8px', height: '12px', overflow: 'hidden' }}>
+                                            <div
+                                                style={{
+                                                    width: `${poolStats.totalSlots > 0 ? (poolStats.occupiedSlots / poolStats.totalSlots) * 100 : 0}%`,
+                                                    background: poolStats.freeSlots > 0 ? '#ff9800' : '#e53935',
+                                                    height: '100%',
+                                                    transition: 'width 0.3s ease'
+                                                }}
+                                            />
+                                        </div>
+                                        <div style={{ marginTop: '8px', fontSize: '13px', color: '#666' }}>
+                                            Занято: {poolStats.occupiedSlots} | Свободно: {poolStats.freeSlots}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p style={{ color: '#666', marginBottom: '12px' }}>Не удалось загрузить статистику пулов</p>
+                                )}
+                                <button
+                                    onClick={createNewPoolHandler}
+                                    disabled={actionLoading}
+                                    style={{
+                                        padding: '12px 24px',
+                                        background: actionLoading ? '#ccc' : '#667eea',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '16px',
+                                        fontWeight: 'bold'
+                                    }}
+                                >
+                                    {actionLoading ? 'Создание пула...' : 'Создать новый пул'}
                                 </button>
                             </div>
 

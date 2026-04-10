@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { Connection, SystemProgram, Transaction, PublicKey } from '@solana/web3.js'
 import { toast } from 'react-toastify'
-import { RPC_URL } from '../main'
-import { getBillsByParticipant, useProgram } from '../api'
+import { getAllObligations, getBillsByParticipant, payFee, settle_position, useProgram } from '../api'
+import { Bill } from '../interfaces'
 
 export default function Bills() {
-	const { publicKey, sendTransaction } = useWallet()
+	const { publicKey } = useWallet()
 	const program = useProgram()
-	const [settlements, setSettlements] = useState([])
+	const [settlements, setSettlements] = useState<Bill[]>([])
+	const [processingBill, setProcessingBill] = useState<string | null>(null)
 
 	useEffect(() => {
 		load()
@@ -25,25 +25,60 @@ export default function Bills() {
 		setSettlements(bills)
 	}
 
-	const pay = async (s: any) => {
-		if (!publicKey) return toast.error("Connect wallet")
+	const payCommission = async (s: Bill) => {
+		if (!publicKey || !program) return toast.error("Connect wallet")
 
-		const conn = new Connection(RPC_URL)
+		try {
+			setProcessingBill(s.pda.toBase58())
+			await payFee(program, s.session_id)
+			toast.success("Комиссия оплачена")
+			await load()
+		} catch (error) {
+			console.error(error)
+			toast.error("Ошибка при оплате комиссии")
+		} finally {
+			setProcessingBill(null)
+		}
+	}
 
-		const ix = SystemProgram.transfer({
-			fromPubkey: publicKey,
-			toPubkey: new PublicKey(s.to_address),
-			lamports: Number(s.amount),
-		})
+	const pay = async (s: Bill) => {
+		if (!publicKey || !program) return toast.error("Connect wallet")
 
-		const tx = new Transaction().add(ix)
+		try {
+			setProcessingBill(s.pda.toBase58())
+			const obligations = await getAllObligations(program)
+			const toSettle = obligations
+				.filter((o) =>
+					o.from.equals(publicKey) &&
+					o.to.equals(s.creditor) &&
+					o.sessionId === s.session_id &&
+					o.amount > 0
+				)
+				.sort((a, b) => a.timestamp - b.timestamp)
 
-		const sig = await sendTransaction(tx, conn)
+			if (toSettle.length === 0) {
+				toast.info("Нет обязательств для сеттла по этой позиции")
+				return
+			}
 
-		console.log(sig)
+			for (const obligation of toSettle) {
+				await settle_position(
+					program,
+					s.session_id,
+					s.creditor,
+					obligation.timestamp,
+					obligation.amount
+				)
+			}
 
-		toast.success("Оплачено!")
-		load()
+			toast.success("Позиция погашена через программу")
+			await load()
+		} catch (error) {
+			console.error(error)
+			toast.error("Ошибка при on-chain погашении позиции")
+		} finally {
+			setProcessingBill(null)
+		}
 	}
 
 	if (!publicKey)
@@ -69,15 +104,28 @@ export default function Bills() {
 						</tr>
 					</thead>
 					<tbody>
-						{settlements.map((s: any) => (
-							<tr key={s.id}>
-								<td>{s.from_address.slice(0, 8)}...</td>
-								<td>{s.to_address.slice(0, 8)}...</td>
-								<td>{s.amount / 1e9} SOL</td>
-								<td>{s.tx_signature ? "Оплачено" : "Не оплачено"}</td>
+						{settlements.map((s) => (
+							<tr key={s.pda.toBase58()}>
+								<td>{s.debitor.toBase58().slice(0, 8)}...</td>
+								<td>{s.creditor.toBase58().slice(0, 8)}...</td>
+								<td>{s.net_amount / 1e9} SOL</td>
+								<td>{s.status === 2 ? "Оплачено" : "Не оплачено"}</td>
 								<td>
-									{s.from_address === publicKey.toString() && !s.tx_signature && (
-										<button className="btn btn-primary" onClick={() => pay(s)}>
+									{s.debitor.equals(publicKey) && s.status === 0 && s.fee_amount > 0 && (
+										<button
+											className="btn btn-secondary"
+											onClick={() => payCommission(s)}
+											disabled={processingBill === s.pda.toBase58()}
+										>
+											Оплатить комиссию
+										</button>
+									)}
+									{s.debitor.equals(publicKey) && (s.status === 1 || (s.status === 0 && s.fee_amount === 0)) && (
+										<button
+											className="btn btn-primary"
+											onClick={() => pay(s)}
+											disabled={processingBill === s.pda.toBase58()}
+										>
 											Оплатить
 										</button>
 									)}
