@@ -1,0 +1,8 @@
+.git
+**/.git
+**/node_modules
+api/target
+frontend/dist
+clearing_solana/target
+clearing_solana/test-ledger
+clearing_solana/.anchor

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
+declare_id!("EFLJbGLz6N2iVNEsrrAtRm1ksX6QViNgj3JGVeyUnpHL");
 
 #[program]
 pub mod clearing_solana {

@@ -1,40 +1,26 @@
-# Используем стабильную версию Rust
-FROM rust:1.90-slim-bookworm
+FROM ubuntu:22.04
 
-# Установка системных зависимостей
+# Базовые зависимости
 RUN apt-get update && apt-get install -y \
     curl \
-    pkg-config \
+    ca-certificates \
     build-essential \
-    libudev-dev \
     libssl-dev \
-    git \
-    python3 \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка Node.js (нужен для Anchor и Surfpool)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs
+# Установка Solana через официальный скрипт
+RUN curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
 
-# Установка Solana CLI
-RUN sh -c "$(curl -sSfL https://release.solana.com/v1.18.4/install)"
+# Добавляем Solana в PATH
 ENV PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
 
-# Установка Anchor CLI
-RUN cargo install --vscode --git https://github.com/coral-xyz/anchor avm --locked --force && \
-    avm install latest && \
-    avm use latest
+# Проверка (необязательно, но полезно)
+# RUN solana --version
 
-# Установка Surfpool глобально через NPM
-RUN npm install -g @magicblock-labs/surfpool
-
-# Рабочая директория
 WORKDIR /app
 
-# Создаем заглушку для ключей (чтобы solana-test-validator запускался)
-RUN solana-keygen new --no-bip39-passphrase --outfile /root/.config/solana/id.json
+COPY . .
 
-# Открываем порты для RPC и Surfpool
-EXPOSE 8899 8900 3000
-
-CMD ["tail", "-f", "/dev/null"]
+CMD ["sleep", "infinity"]
+# CMD ["anchor", "build"]

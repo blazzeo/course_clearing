@@ -16,16 +16,21 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    profiles:
+      - all
+      - db
+      - api
+      - frontend
 
   api:
-    image: clearing-api
     build:
       context: .
       dockerfile: api/Dockerfile
+    image: clearing-api:latest
     container_name: api
     environment:
-      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-http://solana-localnet:8899}
-      SOLANA_WS_URL: ${SOLANA_WS_URL:-ws://solana-localnet:8900}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-http://localnet:8899}
+      SOLANA_WS_URL: ${SOLANA_WS_URL:-ws://localnet:8900}
       DATABASE_URL: ${DATABASE_URL:-postgres://clearing:clearing@postgres:5432/clearing}
       ADMIN_PUBKEY: ${ADMIN_PUBKEY:-11111111111111111111111111111111}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
@@ -36,18 +41,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      solana-localnet:
-        condition: service_started
+      localnet:
+        condition: service_healthy
+      anchor-deploy:
+        condition: service_completed_successfully
     restart: unless-stopped
     profiles:
       - all
       - api
 
   nginx:
-    image: nginx:alpine
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         VITE_API_URL: /api
         VITE_SOLANA_RPC_URL: /solana
@@ -58,30 +64,72 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - api
-      - solana-localnet
+      - localnet
     restart: unless-stopped
     profiles:
       - all
       - frontend
 
-  solana-localnet:
+  anchor-builder:
     build:
-      context: ./clearing_solana/
+      context: ./clearing_solana
       dockerfile: Dockerfile
-    container_name: solana-localnet
+    container_name: anchor-builder
+    working_dir: /app
     volumes:
-      - solana-data:/tmp/test-ledger
-    command: solana-test-validator --reset --ledger /tmp/test-ledger --rpc-port 8899 --dynamic-port-range 8900-8920 --bind-address 0.0.0.0 --quiet
-    healthcheck:
-      test: ["CMD-SHELL", "solana -u http://127.0.0.1:8899 cluster-version >/dev/null 2>&1"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-    restart: unless-stopped
+      - ./clearing_solana:/app
+      - anchor-data:/app/target
+    # command: ["sh", "-c", "anchor keys sync && anchor build"]
+    restart: "no"
+    profiles:
+      - dev
+      - solana
+
+  anchor-deploy:
+    build:
+      context: ./clearing_solana
+      dockerfile: Dockerfile
+      target: deploy
+    image: clearing-anchor-deploy:latest
+    container_name: anchor-deploy
+    environment:
+      SOLANA_URL: http://localnet:8899
+    depends_on:
+      localnet:
+        condition: service_healthy
+    restart: "no"
     profiles:
       - all
       - solana
+      - api
+      - frontend
+
+  localnet:
+    image: solanalabs/solana:v1.18.26
+    container_name: localnet
+    # 0.0.0.0 — иначе RPC из других контейнеров и с хоста не достучаться.
+    command: >
+      solana-test-validator --reset --ledger /ledger
+      --rpc-port 8899 --dynamic-port-range 8900-8999
+      --bind-address 0.0.0.0
+    volumes:
+      - localnet-ledger:/ledger
+    ports:
+      - "8899:8899"
+      - "8900:8900"
+    healthcheck:
+      test: ["CMD-SHELL", "solana cluster-version -u http://127.0.0.1:8899 >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 15s
+    profiles:
+      - all
+      - solana
+      - api
+      - frontend
 
 volumes:
   postgres_data:
-  solana-data:
+  anchor-data:
+  localnet-ledger:
