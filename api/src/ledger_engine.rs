@@ -94,10 +94,23 @@ pub fn netting_clearing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     fn pk(s: &str) -> Pubkey {
         Pubkey::from_str(s).expect("invalid pubkey")
+    }
+
+    fn assert_conservation(participants: &[Pubkey], amounts: &[i64], settlements: &[RawSettlement]) {
+        let mut delta: HashMap<Pubkey, i128> = HashMap::new();
+        for (p, a) in participants.iter().zip(amounts.iter()) {
+            delta.insert(*p, *a as i128);
+        }
+        for s in settlements {
+            *delta.entry(s.from_address).or_insert(0) += s.amount as i128;
+            *delta.entry(s.to_address).or_insert(0) -= s.amount as i128;
+        }
+        assert!(delta.values().all(|v| *v == 0), "non-zero residuals: {delta:?}");
     }
 
     #[test]
@@ -254,5 +267,48 @@ mod tests {
         let amounts = vec![0, 0];
         let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
         assert!(settlements.is_empty());
+    }
+
+    #[test]
+    fn netting_cycle_equal_amounts_results_in_no_transfers() {
+        // user1 -> user2 5, user2 -> user3 5, user3 -> user1 5
+        // net vector == [0,0,0], settlements must be empty
+        let user1 = pk("11111111111111111111111111111111");
+        let user2 = pk("So11111111111111111111111111111111111111112");
+        let user3 = pk("Sysvar1111111111111111111111111111111111111");
+        let participants = vec![user1, user2, user3];
+        let amounts = vec![0, 0, 0];
+        let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
+        assert!(settlements.is_empty());
+    }
+
+    #[test]
+    fn netting_is_deterministic_for_same_input() {
+        let user1 = pk("11111111111111111111111111111111");
+        let user2 = pk("So11111111111111111111111111111111111111112");
+        let user3 = pk("Sysvar1111111111111111111111111111111111111");
+        let user4 = pk("Stake11111111111111111111111111111111111111");
+        let participants = vec![user1, user2, user3, user4];
+        let amounts = vec![-12, 7, 3, 2];
+        let s1 = netting_clearing(&participants, &amounts).expect("netting failed");
+        let s2 = netting_clearing(&participants, &amounts).expect("netting failed");
+        assert_eq!(s1.len(), s2.len());
+        for (a, b) in s1.iter().zip(s2.iter()) {
+            assert_eq!(a.from_address, b.from_address);
+            assert_eq!(a.to_address, b.to_address);
+            assert_eq!(a.amount, b.amount);
+        }
+    }
+
+    #[test]
+    fn netting_preserves_global_balance_invariants() {
+        let user1 = pk("11111111111111111111111111111111");
+        let user2 = pk("So11111111111111111111111111111111111111112");
+        let user3 = pk("Sysvar1111111111111111111111111111111111111");
+        let user4 = pk("Stake11111111111111111111111111111111111111");
+        let participants = vec![user1, user2, user3, user4];
+        let amounts = vec![-11, -4, 8, 7];
+        let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
+        assert_conservation(&participants, &amounts, &settlements);
     }
 }

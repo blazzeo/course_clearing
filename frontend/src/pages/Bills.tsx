@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
-import { getAllObligations, getBillsByParticipant, payFee, settle_position, useProgram } from '../api'
+import { getBillsByParticipant, payFee, settle_position, useProgram } from '../api'
 import { Bill } from '../interfaces'
 
 export default function Bills() {
@@ -30,7 +30,7 @@ export default function Bills() {
 
 		try {
 			setProcessingBill(s.pda.toBase58())
-			await payFee(program, s.session_id)
+			await payFee(program, s.session_id, s.creditor)
 			toast.success("Комиссия оплачена")
 			await load()
 		} catch (error) {
@@ -46,30 +46,7 @@ export default function Bills() {
 
 		try {
 			setProcessingBill(s.pda.toBase58())
-			const obligations = await getAllObligations(program)
-			const toSettle = obligations
-				.filter((o) =>
-					o.from.equals(publicKey) &&
-					o.to.equals(s.creditor) &&
-					o.sessionId === s.session_id &&
-					o.amount > 0
-				)
-				.sort((a, b) => a.timestamp - b.timestamp)
-
-			if (toSettle.length === 0) {
-				toast.info("Нет обязательств для сеттла по этой позиции")
-				return
-			}
-
-			for (const obligation of toSettle) {
-				await settle_position(
-					program,
-					s.session_id,
-					s.creditor,
-					obligation.timestamp,
-					obligation.amount
-				)
-			}
+			await settle_position(program, s.session_id, s.creditor, s.net_amount)
 
 			toast.success("Позиция погашена через программу")
 			await load()

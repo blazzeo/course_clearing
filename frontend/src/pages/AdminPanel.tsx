@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-import { buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
-import { Participant, UserType, UserTypeToString } from '../interfaces'
+import { applyInternalNetting, buildApplyInternalNettingTx, buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingSessionPayload, getClearingState, getLastClearingAudit, getPool, getPoolPda, getUserRole, listClearingSessions, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
+import { ClearingAuditResult, ClearingSessionSummary, Participant, UserType, UserTypeToString } from '../interfaces'
 import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
 
@@ -41,10 +41,21 @@ function formatTimeExtended(seconds: number): string {
 }
 
 export default function AdminPanel() {
+    const shortKey = (value: string) => `${value.slice(0, 6)}...${value.slice(-6)}`;
+    const fmtSol = (lamports: number) => `${(lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
+    const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU');
+
     interface ClearingApiResponse {
         success: boolean;
         data?: {
+            session_id: number;
+            result_id: string;
+            hash: string;
             data: { obligation: string; amount: number }[];
+            internal_data: { obligation: string; amount: number }[];
+            merkle_root?: string;
+            merkle_leaves?: { kind: string; obligation: string; amount: number; leaf_hash: string; proof: string[] }[];
+            audit_log?: { step: string; detail: string; timestamp: number }[];
             timestamp: number;
         };
         error?: string;
@@ -69,9 +80,38 @@ export default function AdminPanel() {
     } | null>(null)
     const [poolStatsLoading, setPoolStatsLoading] = useState(false)
     const [lastHandledResultTimestamp, setLastHandledResultTimestamp] = useState<number | null>(null)
+    const [lastHandledResultId, setLastHandledResultId] = useState<string | null>(null)
+    const [lastAudit, setLastAudit] = useState<ClearingAuditResult | null>(null)
+    const [sessions, setSessions] = useState<ClearingSessionSummary[]>([])
+    const [sessionsLoading, setSessionsLoading] = useState(false)
+    const [expandedSessions, setExpandedSessions] = useState<Record<number, ClearingAuditResult>>({})
 
     const { publicKey, signMessage, signAllTransactions } = useWallet()
     const program = useProgram()
+    const CLEARING_LOG_PREFIX = "[AdminClearingDebug]";
+
+    const logClearing = (requestId: string, stage: string, payload?: unknown) => {
+        if (payload !== undefined) {
+            console.log(`${CLEARING_LOG_PREFIX}[${requestId}] ${stage}`, payload);
+            return;
+        }
+        console.log(`${CLEARING_LOG_PREFIX}[${requestId}] ${stage}`);
+    };
+
+    const logClearingError = (requestId: string, stage: string, error: unknown) => {
+        if (axios.isAxiosError(error)) {
+            console.error(`${CLEARING_LOG_PREFIX}[${requestId}] ${stage} axios error`, {
+                message: error.message,
+                code: error.code,
+                status: error.response?.status,
+                data: error.response?.data,
+                url: error.config?.url,
+                method: error.config?.method,
+            });
+            return;
+        }
+        console.error(`${CLEARING_LOG_PREFIX}[${requestId}] ${stage}`, error);
+    };
 
     useEffect(() => {
         checkAdminStatus()
@@ -87,7 +127,6 @@ export default function AdminPanel() {
 
         try {
             let role = await getUserRole(program, publicKey);
-            console.log(role)
             if (role == UserType.Administator)
                 setIsAdmin(true)
         } catch (error) {
@@ -95,6 +134,30 @@ export default function AdminPanel() {
             toast.error('Ошибка при проверке прав администратора')
         } finally {
             setCheckingAdmin(false)
+        }
+    }
+
+    const loadSessionHistory = async () => {
+        try {
+            setSessionsLoading(true)
+            const rows = await listClearingSessions(API_URL)
+            setSessions(rows)
+        } catch (error) {
+            console.error('Error loading clearing sessions:', error)
+            toast.error('Не удалось загрузить историю сессий')
+        } finally {
+            setSessionsLoading(false)
+        }
+    }
+
+    const openSession = async (sessionId: number) => {
+        if (expandedSessions[sessionId]) return;
+        try {
+            const payload = await getClearingSessionPayload(API_URL, sessionId)
+            setExpandedSessions(prev => ({ ...prev, [sessionId]: payload }))
+        } catch (error) {
+            console.error(`Error loading session payload #${sessionId}:`, error)
+            toast.error(`Не удалось загрузить сессию #${sessionId}`)
         }
     }
 
@@ -111,25 +174,125 @@ export default function AdminPanel() {
         return { message, signature: signatureBase64, nonce, timestamp };
     }
 
+    const renderSessionDetails = (audit: ClearingAuditResult) => (
+        <div style={{ marginTop: '10px', fontSize: '13px', color: '#333', display: 'grid', gap: '10px' }}>
+            <div style={{ background: '#f8fafc', borderRadius: '6px', padding: '8px' }}>
+                <div><b>Result hash:</b> <span style={{ fontFamily: 'monospace' }}>{audit.hash}</span></div>
+                <div><b>Merkle root:</b> <span style={{ fontFamily: 'monospace' }}>{audit.merkle_root || '-'}</span></div>
+                <div><b>Solver:</b> {audit.solver_version || 'n/a'} | <b>Build:</b> {audit.build_sha || 'n/a'}</div>
+                <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
+            </div>
+
+            {!!audit.input_obligations?.length && (
+                <details>
+                    <summary style={{ cursor: 'pointer' }}>Входные обязательства ({audit.input_obligations.length})</summary>
+                    <table style={{ width: '100%', marginTop: '6px', borderCollapse: 'collapse' }}>
+                        <thead><tr><th>Obligation</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr></thead>
+                        <tbody>
+                            {audit.input_obligations.map((x) => (
+                                <tr key={x.obligation}>
+                                    <td>{shortKey(x.obligation)}</td>
+                                    <td>{shortKey(x.from)}</td>
+                                    <td>{shortKey(x.to)}</td>
+                                    <td>{fmtSol(x.amount)}</td>
+                                    <td>{x.status}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </details>
+            )}
+
+            <details>
+                <summary style={{ cursor: 'pointer' }}>External allocations ({audit.data.length})</summary>
+                <ul>
+                    {audit.data.map((x) => <li key={`ex-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
+                </ul>
+            </details>
+
+            <details>
+                <summary style={{ cursor: 'pointer' }}>Internal nettings ({audit.internal_data.length})</summary>
+                <ul>
+                    {audit.internal_data.map((x) => <li key={`in-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
+                </ul>
+            </details>
+
+            <details>
+                <summary style={{ cursor: 'pointer' }}>Audit timeline ({audit.audit_log.length})</summary>
+                <ul>
+                    {audit.audit_log.map((entry, idx) => (
+                        <li key={`${entry.step}-${idx}`}><b>{entry.step}</b> [{fmtTs(entry.timestamp)}]: {entry.detail}</li>
+                    ))}
+                </ul>
+            </details>
+        </div>
+    );
+
     const isResultFresh = (ts: number): boolean => {
         const now = Math.floor(Date.now() / 1000);
         return Math.abs(now - ts) <= FRESH_RESULT_TTL_SECONDS;
     }
 
-    const executeOnChainAllocations = async (allocations: { obligation: string; amount: number }[]) => {
+    const executeOnChainAllocations = async (
+        requestId: string,
+        allocations: { obligation: string; amount: number }[],
+        internalNettings: { obligation: string; amount: number }[]
+    ) => {
         if (!publicKey || !program) {
             throw new Error("Кошелек не найден")
+        }
+        logClearing(requestId, "on-chain execution started", {
+            allocationsCount: allocations.length,
+            internalNettingsCount: internalNettings.length,
+            wallet: publicKey.toBase58(),
+            programId: program.programId.toBase58(),
+            usesBatchSigning: Boolean(signAllTransactions),
+        });
+        // Preflight: validate current on-chain obligation snapshot before sending txs.
+        for (const item of [...allocations, ...internalNettings]) {
+            const obligationPda = new PublicKey(item.obligation);
+            const acc = await (program as any).account.obligation.fetch(obligationPda);
+            const status = acc.status as Record<string, unknown>;
+            const isAllowed =
+                status?.created !== undefined ||
+                status?.confirmed !== undefined ||
+                status?.partiallyNetted !== undefined;
+            if (!isAllowed) {
+                throw new Error(`Obligation ${item.obligation} has incompatible status for createPosition`);
+            }
+            const onchainAmount = Number(acc.amount.toString());
+            logClearing(requestId, "preflight obligation", {
+                obligation: item.obligation,
+                requestedAmount: item.amount,
+                onchainAmount,
+                status,
+            });
+            if (item.amount <= 0 || onchainAmount < item.amount) {
+                throw new Error(`Allocation invariant failed for obligation ${item.obligation}`);
+            }
         }
         if (signAllTransactions) {
             const state = await getClearingState(program);
             const nextSessionId = state.total_sessions + 1;
+            logClearing(requestId, "batch mode session prepared", { nextSessionId });
             const txs = [];
-            txs.push(await buildStartClearingSessionTx(program, allocations.length));
+            txs.push(await buildStartClearingSessionTx(program, allocations.length + internalNettings.length));
+            for (const item of internalNettings) {
+                txs.push(
+                    await buildApplyInternalNettingTx(
+                        program,
+                        new PublicKey(item.obligation),
+                        Number(item.amount),
+                        nextSessionId
+                    )
+                );
+            }
             for (const item of allocations) {
                 txs.push(
                     await buildCreatePositionByObligationTx(
                         program,
                         new PublicKey(item.obligation),
+                        Number(item.amount),
                         nextSessionId
                     )
                 );
@@ -141,29 +304,56 @@ export default function AdminPanel() {
                 tx.feePayer = publicKey;
                 tx.recentBlockhash = latest.blockhash;
             });
+            logClearing(requestId, "batch transactions prepared", {
+                txCount: txs.length,
+                recentBlockhash: latest.blockhash,
+            });
 
             const signed = await signAllTransactions(txs);
-            for (const tx of signed) {
+            for (let i = 0; i < signed.length; i++) {
+                const tx = signed[i];
                 const sig = await program.provider.connection.sendRawTransaction(tx.serialize());
+                logClearing(requestId, "tx sent", { index: i, signature: sig });
                 await program.provider.connection.confirmTransaction(
                     { signature: sig, ...latest },
                     "confirmed"
                 );
+                logClearing(requestId, "tx confirmed", { index: i, signature: sig });
             }
         } else {
-            await startClearingSession(program, allocations.length);
+            logClearing(requestId, "sequential mode session start");
+            await startClearingSession(program, allocations.length + internalNettings.length);
+            for (const item of internalNettings) {
+                logClearing(requestId, "applyInternalNetting tx", item);
+                await applyInternalNetting(
+                    program,
+                    new PublicKey(item.obligation),
+                    Number(item.amount)
+                );
+            }
             for (const item of allocations) {
+                logClearing(requestId, "createPosition tx", item);
                 await createPositionByObligation(
                     program,
-                    new PublicKey(item.obligation)
+                    new PublicKey(item.obligation),
+                    Number(item.amount)
                 );
             }
             await finalizeClearingSession(program);
+            logClearing(requestId, "sequential mode session finalized");
         }
+        logClearing(requestId, "on-chain execution finished");
     }
 
-    const fetchClearingResult = async (endpoint: "run" | "last"): Promise<ClearingApiResponse["data"]> => {
+    const fetchClearingResult = async (requestId: string, endpoint: "run" | "last"): Promise<ClearingApiResponse["data"]> => {
         const payload = await signAdminRequest();
+        logClearing(requestId, "api request", {
+            endpoint,
+            url: `${API_URL}/clearing/${endpoint}`,
+            wallet: publicKey?.toBase58(),
+            timestamp: payload.timestamp,
+            nonce: payload.nonce,
+        });
         const res = await axios.post<ClearingApiResponse>(
             `${API_URL}/clearing/${endpoint}`,
             payload,
@@ -173,6 +363,17 @@ export default function AdminPanel() {
                 },
             }
         );
+        logClearing(requestId, "api response", {
+            status: res.status,
+            success: res.data.success,
+            resultId: res.data.data?.result_id,
+            sessionId: res.data.data?.session_id,
+            hash: res.data.data?.hash,
+            externalCount: res.data.data?.data?.length,
+            internalCount: res.data.data?.internal_data?.length,
+            timestamp: res.data.data?.timestamp,
+            error: res.data.error,
+        });
         if (!res.data.success || !res.data.data) {
             throw new Error(res.data.error || "Clearing API returned empty response");
         }
@@ -185,24 +386,48 @@ export default function AdminPanel() {
             return
         }
 
+        const requestId = `run-${Date.now()}`;
         try {
             setActionLoading(true)
+            logClearing(requestId, "handler started");
 
-            const result = await fetchClearingResult("run");
+            const result = await fetchClearingResult(requestId, "run");
+            if (lastHandledResultId !== null && result.result_id === lastHandledResultId) {
+                logClearing(requestId, "skipped: same result_id", {
+                    resultId: result.result_id,
+                    lastHandledResultId,
+                });
+                toast.info("Новой сессии не было");
+                return;
+            }
             if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
+                logClearing(requestId, "skipped: stale timestamp", {
+                    resultTimestamp: result.timestamp,
+                    lastHandledResultTimestamp,
+                });
                 toast.info("Новой сессии не было");
                 return;
             }
             if (!isResultFresh(result.timestamp)) {
+                logClearing(requestId, "skipped: result too old", {
+                    resultTimestamp: result.timestamp,
+                    now: Math.floor(Date.now() / 1000),
+                });
                 toast.warn("Результат клиринга устарел. Запусти клиринг повторно.");
                 return;
             }
-            await executeOnChainAllocations(result.data);
+            await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
             setLastHandledResultTimestamp(result.timestamp);
+            setLastHandledResultId(result.result_id);
+            const audit = await getLastClearingAudit(API_URL);
+            setLastAudit(audit);
+            logClearing(requestId, "handler finished successfully", {
+                processed: result.data.length + (result.internal_data?.length || 0),
+            });
 
-            toast.success(`Клиринг завершен. Обработано обязательств: ${result.data.length}`);
+            toast.success(`Клиринг завершен. Обработано обязательств: ${result.data.length + (result.internal_data?.length || 0)}`);
         } catch (error) {
-            console.error('Error executing clearing:', error)
+            logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при проведении операции')
         } finally {
             setActionLoading(false)
@@ -215,28 +440,53 @@ export default function AdminPanel() {
             return
         }
 
+        const requestId = `last-${Date.now()}`;
         try {
             setActionLoading(true)
-            const result = await fetchClearingResult("last");
+            logClearing(requestId, "handler started");
+            const result = await fetchClearingResult(requestId, "last");
 
-            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
+            if (lastHandledResultId !== null && result.result_id === lastHandledResultId) {
+                logClearing(requestId, "skipped: same result_id", {
+                    resultId: result.result_id,
+                    lastHandledResultId,
+                });
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (!result.data.length) {
+            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
+                logClearing(requestId, "skipped: stale timestamp", {
+                    resultTimestamp: result.timestamp,
+                    lastHandledResultTimestamp,
+                });
+                toast.info("Новой сессии не было");
+                return;
+            }
+            if (!result.data.length && !(result.internal_data?.length)) {
+                logClearing(requestId, "skipped: empty result");
                 toast.info("Новой сессии не было");
                 return;
             }
             if (!isResultFresh(result.timestamp)) {
+                logClearing(requestId, "skipped: result too old", {
+                    resultTimestamp: result.timestamp,
+                    now: Math.floor(Date.now() / 1000),
+                });
                 toast.info("Новой сессии не было");
                 return;
             }
 
-            await executeOnChainAllocations(result.data);
+            await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
             setLastHandledResultTimestamp(result.timestamp);
-            toast.success(`Обработан последний результат сессии. Обязательств: ${result.data.length}`);
+            setLastHandledResultId(result.result_id);
+            const audit = await getLastClearingAudit(API_URL);
+            setLastAudit(audit);
+            logClearing(requestId, "handler finished successfully", {
+                processed: result.data.length + (result.internal_data?.length || 0),
+            });
+            toast.success(`Обработан последний результат сессии. Обязательств: ${result.data.length + (result.internal_data?.length || 0)}`);
         } catch (error) {
-            console.error('Error executing last session result:', error)
+            logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при обработке последнего результата')
         } finally {
             setActionLoading(false)
@@ -247,6 +497,7 @@ export default function AdminPanel() {
         if (isAdmin) {
             loadAllUsers()
             loadSystemSettings()
+            loadSessionHistory()
         }
     }, [isAdmin])
 
@@ -256,7 +507,6 @@ export default function AdminPanel() {
 
         try {
             const participants = await getAllParticipants(program)
-            console.log("participants: ", participants)
             setAllUsers(participants)
         } catch (error) {
             console.error('Error loading users:', error)
@@ -359,7 +609,6 @@ export default function AdminPanel() {
             const feesLamports = escrowAccount.totalFees.toNumber();
             const feesSol = feesLamports / LAMPORTS_PER_SOL;
 
-            console.log(`Накоплено комиссий: ${feesSol} SOL`);
             setEscrowBalance(feesSol);
 
         } catch (error) {
@@ -723,6 +972,79 @@ export default function AdminPanel() {
                                         {actionLoading ? 'Проверка last result...' : 'Получить last session result'}
                                     </button>
                                 </div>
+                            </div>
+                            {lastAudit && (
+                                <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
+                                    <h3 style={{ marginBottom: '8px' }}>Последний audit сессии</h3>
+                                    <p style={{ color: '#555', marginBottom: '8px' }}>
+                                        Session #{lastAudit.session_id}, Result: {lastAudit.result_id}
+                                    </p>
+                                    <p style={{ color: '#333', marginBottom: '8px', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                                        Merkle root: {lastAudit.merkle_root || '-'}
+                                    </p>
+                                    <p style={{ color: '#666', marginBottom: '12px' }}>
+                                        External: {lastAudit.data.length}, Internal: {lastAudit.internal_data.length}, Leaves: {lastAudit.merkle_leaves.length}
+                                    </p>
+                                    <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid #eee', borderRadius: '6px', padding: '8px' }}>
+                                        {lastAudit.audit_log.map((entry, idx) => (
+                                            <div key={`${entry.step}-${idx}`} style={{ fontSize: '13px', marginBottom: '6px', color: '#333' }}>
+                                                <b>{entry.step}</b>: {entry.detail}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                    <h3 style={{ margin: 0 }}>История клиринговых сессий</h3>
+                                    <button
+                                        onClick={loadSessionHistory}
+                                        disabled={sessionsLoading}
+                                        style={{
+                                            padding: '8px 14px',
+                                            background: sessionsLoading ? '#ccc' : '#667eea',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '4px',
+                                            cursor: sessionsLoading ? 'not-allowed' : 'pointer'
+                                        }}
+                                    >
+                                        {sessionsLoading ? 'Обновление...' : 'Обновить список'}
+                                    </button>
+                                </div>
+                                {sessionsLoading ? (
+                                    <p style={{ color: '#666' }}>Загрузка истории...</p>
+                                ) : sessions.length === 0 ? (
+                                    <p style={{ color: '#666' }}>Сессии пока не найдены</p>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '10px' }}>
+                                        {sessions.map((s) => (
+                                            <details
+                                                key={s.session_id}
+                                                onToggle={(e) => {
+                                                    if ((e.currentTarget as HTMLDetailsElement).open) {
+                                                        openSession(s.session_id);
+                                                    }
+                                                }}
+                                                style={{ border: '1px solid #e8e8e8', borderRadius: '6px', padding: '10px' }}
+                                            >
+                                                <summary style={{ cursor: 'pointer', color: '#333' }}>
+                                                    Session #{s.session_id} | result: {s.result_id} | ext: {s.external_count}, int: {s.internal_count}
+                                                </summary>
+                                                <div style={{ marginTop: '10px', fontSize: '13px', color: '#444' }}>
+                                                    <div>Hash: <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{s.result_hash}</span></div>
+                                                    <div>Merkle root: <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{s.merkle_root}</span></div>
+                                                    <div>Created: {new Date(s.created_at * 1000).toLocaleString('ru-RU')}</div>
+                                                    {expandedSessions[s.session_id] ? (
+                                                        renderSessionDetails(expandedSessions[s.session_id])
+                                                    ) : (
+                                                        <div style={{ marginTop: '8px', color: '#999' }}>Загрузка деталей...</div>
+                                                    )}
+                                                </div>
+                                            </details>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Вывод комиссий */}

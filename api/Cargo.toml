@@ -27,3 +27,4 @@ base64 = "0.22.1"
 solana-program = "3.0.0"
 anchor-lang = { version = "0.32.1", features = ["derive"] }
 tokio-stream = "0.1"
+sha2 = "0.10"

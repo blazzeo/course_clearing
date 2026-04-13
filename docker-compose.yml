@@ -32,7 +32,7 @@ services:
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-http://localnet:8899}
       SOLANA_WS_URL: ${SOLANA_WS_URL:-ws://localnet:8900}
       DATABASE_URL: ${DATABASE_URL:-postgres://clearing:clearing@postgres:5432/clearing}
-      ADMIN_PUBKEY: ${ADMIN_PUBKEY:-11111111111111111111111111111111}
+      ADMIN_PUBKEY: ${ADMIN_PUBKEY}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       RUST_LOG: info
       PORT: 3001
@@ -94,6 +94,22 @@ services:
     container_name: anchor-deploy
     environment:
       SOLANA_URL: http://localnet:8899
+      ADMIN_SECRET_KEY_JSON: ${ADMIN_SECRET_KEY_JSON:-}
+      AIRDROP_ADDRESSES: ${AIRDROP_ADDRESSES:-}
+      AIRDROP_SOL: ${AIRDROP_SOL:-2}
+    command: >
+      sh -c '
+      export PATH="/root/.local/share/solana/install/active_release/bin:$$PATH" &&
+      mkdir -p /root/.config/solana &&
+      if [ -n "$$ADMIN_SECRET_KEY_JSON" ]; then
+        echo "$$ADMIN_SECRET_KEY_JSON" > /root/.config/solana/id.json;
+      else
+        solana-keygen new --force --no-bip39-passphrase --silent -o /root/.config/solana/id.json;
+      fi &&
+      solana config set --url "$$SOLANA_URL" --keypair /root/.config/solana/id.json &&
+      solana airdrop 200 "$(solana-keygen pubkey /root/.config/solana/id.json)" || true &&
+      anchor migrate --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json
+      '
     depends_on:
       localnet:
         condition: service_healthy
@@ -112,6 +128,7 @@ services:
       solana-test-validator --reset --ledger /ledger
       --rpc-port 8899 --dynamic-port-range 8900-8999
       --bind-address 0.0.0.0
+      --quiet
     volumes:
       - localnet-ledger:/ledger
     ports:

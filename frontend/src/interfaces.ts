@@ -67,6 +67,52 @@ export interface Bill {
     fee_amount: number,
 }
 
+export interface ClearingAuditLeaf {
+    kind: string;
+    obligation: string;
+    amount: number;
+    leaf_hash: string;
+    proof: string[];
+}
+
+export interface ClearingAuditLogEntry {
+    step: string;
+    detail: string;
+    timestamp: number;
+}
+
+export interface ClearingAuditResult {
+    session_id: number;
+    result_id: string;
+    hash: string;
+    solver_version?: string;
+    build_sha?: string;
+    input_obligations?: {
+        obligation: string;
+        from: string;
+        to: string;
+        amount: number;
+        status: string;
+        timestamp: number;
+    }[];
+    data: { obligation: string; amount: number }[];
+    internal_data: { obligation: string; amount: number }[];
+    merkle_root: string;
+    merkle_leaves: ClearingAuditLeaf[];
+    audit_log: ClearingAuditLogEntry[];
+    timestamp: number;
+}
+
+export interface ClearingSessionSummary {
+    session_id: number;
+    result_id: string;
+    result_hash: string;
+    merkle_root: string;
+    external_count: number;
+    internal_count: number;
+    created_at: number;
+}
+
 export function UserTypeToString(userType: UserType): string {
     switch (userType) {
         case UserType.Counterparty: return 'Контрагент';

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("EFLJbGLz6N2iVNEsrrAtRm1ksX6QViNgj3JGVeyUnpHL");
+declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
 
 #[program]
 pub mod clearing_solana {
@@ -143,6 +143,7 @@ pub mod clearing_solana {
         from: Pubkey,
         to: Pubkey,
         timestamp: i64,
+        amount: u64,
     ) -> Result<()> {
         let session = &mut ctx.accounts.session;
         let state = &ctx.accounts.state;
@@ -156,60 +157,102 @@ pub mod clearing_solana {
         let obligation = &mut ctx.accounts.obligation;
         require!(
             obligation.status == ObligationStatus::Created
-                || obligation.status == ObligationStatus::Confirmed,
+                || obligation.status == ObligationStatus::Confirmed
+                || obligation.status == ObligationStatus::PartiallyNetted,
             ClearingError::InvalidObligationStatus
         );
-        require!(
-            obligation.session_id.is_none(),
-            ClearingError::AlreadyProcessed
-        );
+        require!(amount > 0, ClearingError::InvalidAllocationAmount);
+        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        if let Some(existing_session) = obligation.session_id {
+            require!(existing_session == session_id, ClearingError::SessionMismatch);
+        } else {
+            obligation.session_id = Some(session_id);
+        }
 
-        // Mark obligation as compeleted in that session
-        obligation.session_id = Some(session_id);
-        obligation.status = ObligationStatus::Netted;
+        obligation.amount = obligation
+            .amount
+            .checked_sub(amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+        if obligation.amount == 0 {
+            obligation.status = ObligationStatus::Netted;
+            let pool = &mut ctx.accounts.pool;
+            pool.remove_obligation(obligation.key())?;
+        } else {
+            obligation.status = ObligationStatus::PartiallyNetted;
+        }
 
-        // Remove obligation from pool
-        let pool = &mut ctx.accounts.pool;
-        pool.remove_obligation(obligation.key())?;
-
-        // Update from position
-        let from_pos = &mut ctx.accounts.from_position;
+        // Update pair position (debtor -> creditor)
+        let from_pos = &mut ctx.accounts.pair_position;
         from_pos.net_amount = from_pos
             .net_amount
-            .checked_add(obligation.amount)
+            .checked_add(amount)
             .ok_or(CustomErrors::MathOverflow)?;
         if from_pos.status == NetPositionStatus::None {
             from_pos.session_id = session_id;
             from_pos.debitor = obligation.from;
             from_pos.creditor = obligation.to;
-            from_pos.bump = ctx.bumps.from_position;
+            from_pos.bump = ctx.bumps.pair_position;
         }
 
         //  Calculate new add fee and update total fee
-        let add_fee_amount = state.calculate_fee(obligation.amount)?;
+        let add_fee_amount = state.calculate_fee(amount)?;
         from_pos.fee_amount = from_pos
             .fee_amount
             .checked_add(add_fee_amount)
             .ok_or(CustomErrors::MathOverflow)?;
-
-        // Update to position
-        let to_pos = &mut ctx.accounts.to_position;
-        to_pos.net_amount = to_pos
-            .net_amount
-            .checked_add(obligation.amount)
-            .ok_or(CustomErrors::MathOverflow)?;
-        if to_pos.status == NetPositionStatus::None {
-            to_pos.session_id = session_id;
-            to_pos.debitor = obligation.from;
-            to_pos.creditor = obligation.to;
-            to_pos.bump = ctx.bumps.to_position;
-        }
 
         session.processed_count = session
             .processed_count
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
 
+        Ok(())
+    }
+
+    #[allow(unused_variables)]
+    pub fn apply_internal_netting(
+        ctx: Context<ApplyInternalNetting>,
+        from: Pubkey,
+        to: Pubkey,
+        timestamp: i64,
+        amount: u64,
+    ) -> Result<()> {
+        let session = &mut ctx.accounts.session;
+        let session_id = session.id;
+        let obligation = &mut ctx.accounts.obligation;
+        require!(
+            session.status == ClearingSessionStatus::Open,
+            ClearingError::InvalidSessionStatus
+        );
+        require!(amount > 0, ClearingError::InvalidAllocationAmount);
+        require!(
+            obligation.status == ObligationStatus::Created
+                || obligation.status == ObligationStatus::Confirmed
+                || obligation.status == ObligationStatus::PartiallyNetted,
+            ClearingError::InvalidObligationStatus
+        );
+        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        if let Some(existing_session) = obligation.session_id {
+            require!(existing_session == session_id, ClearingError::SessionMismatch);
+        } else {
+            obligation.session_id = Some(session_id);
+        }
+
+        obligation.amount = obligation
+            .amount
+            .checked_sub(amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+        if obligation.amount == 0 {
+            obligation.status = ObligationStatus::Netted;
+            let pool = &mut ctx.accounts.pool;
+            pool.remove_obligation(obligation.key())?;
+            emit!(ObligationNetted {
+                obligation: obligation.key(),
+                timestamp: Clock::get()?.unix_timestamp
+            });
+        } else {
+            obligation.status = ObligationStatus::PartiallyNetted;
+        }
         Ok(())
     }
 
@@ -380,11 +423,9 @@ pub mod clearing_solana {
         ctx: Context<SettlePosition>,
         session_id: u64,
         to: Pubkey,
-        timestamp: i64,
         amount: u64,
     ) -> Result<()> {
         let net_position = &mut ctx.accounts.net_position;
-        let obligation = &mut ctx.accounts.obligation;
 
         require!(
             net_position.status == NetPositionStatus::FeePaid,
@@ -399,7 +440,7 @@ pub mod clearing_solana {
             SettlePositionError::InvalidRecipient
         );
         require!(amount > 0, SettlePositionError::InvalidAmount);
-        require!(obligation.amount >= amount, SettlePositionError::Overpay);
+        require!(net_position.net_amount >= amount, SettlePositionError::Overpay);
 
         // transfer
         let cpi_ctx = CpiContext::new(
@@ -414,35 +455,21 @@ pub mod clearing_solana {
         system_program::transfer(cpi_ctx, amount)?;
 
         let clock = Clock::get()?;
-
-        if amount < obligation.amount {
-            obligation.amount = obligation
-                .amount
-                .checked_sub(amount)
-                .ok_or(CustomErrors::MathOverflow)?;
-            obligation.status = ObligationStatus::PartiallyNetted;
-            net_position.net_amount = net_position
-                .net_amount
-                .checked_sub(amount)
-                .ok_or(CustomErrors::MathOverflow)?;
-            if net_position.net_amount == 0 {
-                net_position.status = NetPositionStatus::Done;
-            }
-
-            emit!(PositionPartialySettled {
+        net_position.net_amount = net_position
+            .net_amount
+            .checked_sub(amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+        if net_position.net_amount == 0 {
+            net_position.status = NetPositionStatus::Done;
+            emit!(PositionSettled {
                 position: net_position.key(),
-                settle_amount: amount,
-                remaining_amount: obligation.amount,
                 timestamp: clock.unix_timestamp
             });
         } else {
-            obligation.amount = 0;
-            obligation.status = ObligationStatus::Netted;
-            net_position.net_amount = 0;
-            net_position.status = NetPositionStatus::Done;
-
-            emit!(PositionSettled {
+            emit!(PositionPartialySettled {
                 position: net_position.key(),
+                settle_amount: amount,
+                remaining_amount: net_position.net_amount,
                 timestamp: clock.unix_timestamp
             });
         }
@@ -581,7 +608,7 @@ pub mod clearing_solana {
     }
 
     /// Method to pay fee of the session
-    pub fn pay_fee(ctx: Context<PayFee>, session_id: u64) -> Result<()> {
+    pub fn pay_fee(ctx: Context<PayFee>, session_id: u64, creditor: Pubkey) -> Result<()> {
         let clock = Clock::get()?;
 
         let escrow = &mut ctx.accounts.escrow;
@@ -591,8 +618,15 @@ pub mod clearing_solana {
             net_position.session_id == session_id,
             PayFeeError::SessionIdMismatch
         );
-
-        require!(net_position.fee_amount > 0, PayFeeError::InvalidFeeAccount);
+        require!(
+            net_position.creditor == creditor,
+            PayFeeError::InvalidFeeAccount
+        );
+        if net_position.fee_amount == 0 {
+            net_position.status = NetPositionStatus::FeePaid;
+            participant.update_timestamp = clock.unix_timestamp;
+            return Ok(());
+        }
 
         //  Create instruction
         let transfer_instruction = Transfer {
@@ -757,7 +791,7 @@ pub mod clearing_solana {
 }
 
 #[derive(Accounts)]
-#[instruction(session_id: u64)]
+#[instruction(session_id: u64, creditor: Pubkey)]
 pub struct PayFee<'info> {
     #[account(
         mut,
@@ -783,7 +817,7 @@ pub struct PayFee<'info> {
 
     #[account(
         mut,
-        seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
+        seeds = [b"position", session.key().as_ref(), authority.key().as_ref(), creditor.as_ref()],
         bump,
         constraint = net_position.status != NetPositionStatus::FeePaid @ PayFeeError::AlreadyPaid,
     )]
@@ -1481,7 +1515,7 @@ pub enum DeclineObligationError {
 }
 
 #[derive(Accounts)]
-#[instruction(from: Pubkey, to: Pubkey, timestamp: i64)]
+#[instruction(from: Pubkey, to: Pubkey, timestamp: i64, amount: u64)]
 pub struct CreatePosition<'info> {
     #[account(
         mut,
@@ -1515,19 +1549,10 @@ pub struct CreatePosition<'info> {
         init_if_needed,
         payer = payer,
         space = 8 + NetPosition::LEN,
-        seeds = [b"position", session.key().as_ref(), obligation.from.as_ref()], 
+        seeds = [b"position", session.key().as_ref(), obligation.from.as_ref(), obligation.to.as_ref()],
         bump
     )]
-    pub from_position: Box<Account<'info, NetPosition>>,
-
-    #[account(
-        init_if_needed,
-        payer = payer,
-        space = 8 + NetPosition::LEN,
-        seeds = [b"position", session.key().as_ref(), obligation.to.as_ref()], 
-        bump
-    )]
-    pub to_position: Box<Account<'info, NetPosition>>,
+    pub pair_position: Box<Account<'info, NetPosition>>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -1535,11 +1560,48 @@ pub struct CreatePosition<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(from: Pubkey, to: Pubkey, timestamp: i64, amount: u64)]
+pub struct ApplyInternalNetting<'info> {
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Box<Account<'info, ClearingState>>,
+
+    #[account(
+        mut,
+        seeds = [b"session", &state.total_sessions.to_le_bytes()],
+        bump = session.bump
+    )]
+    pub session: Box<Account<'info, ClearingSession>>,
+
+    #[account(
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub obligation: Box<Account<'info, Obligation>>,
+
+    #[account(
+        mut,
+        seeds = [b"pool", obligation.pool_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
 #[error_code]
 pub enum ClearingError {
     AlreadyProcessed,
     InvalidSessionStatus,
     InvalidObligationStatus,
+    InvalidAllocationAmount,
+    SessionMismatch,
 }
 
 #[derive(Accounts)]
@@ -1735,7 +1797,7 @@ pub struct RegisterParticipant<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(session_id: u64, to: Pubkey, timestamp: i64, amount: u64)]
+#[instruction(session_id: u64, to: Pubkey, amount: u64)]
 pub struct SettlePosition<'info> {
     #[account(
         mut,
@@ -1746,26 +1808,12 @@ pub struct SettlePosition<'info> {
 
     #[account(
         mut,
-        seeds = [b"position", session.key().as_ref(), authority.key().as_ref()],
+        seeds = [b"position", session.key().as_ref(), authority.key().as_ref(), to.as_ref()],
         bump,
         constraint = net_position.status == NetPositionStatus::FeePaid @ SettlePositionError::FeeNotPaid,
         constraint = net_position.net_amount > 0 @ SettlePositionError::NoNeedInPayment
     )]
     pub net_position: Account<'info, NetPosition>,
-
-    #[account(
-        mut,
-        seeds = [b"obligation", authority.key().as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
-        bump
-    )]
-    pub obligation: Account<'info, Obligation>,
-
-    #[account(
-        mut,
-        seeds = [b"pool", &obligation.pool_id.to_le_bytes()],
-        bump
-    )]
-    pub pool: Box<Account<'info, ObligationPool>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,

@@ -5,8 +5,9 @@ use crate::{
 };
 use actix_web::{http::StatusCode, post, web, HttpResponse, Responder};
 use chrono::Utc;
+use sqlx::PgPool;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -189,4 +190,150 @@ pub async fn metrics(metrics: web::Data<Arc<AppMetrics>>) -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/plain; version=0.0.4")
         .body(body)
+}
+
+pub async fn get_obligations_by_wallet(
+    db_pool: web::Data<PgPool>,
+    wallet: web::Path<String>,
+) -> impl Responder {
+    let wallet = wallet.into_inner();
+    let rows = sqlx::query_as::<_, DbObligationRecord>(
+        r#"
+        SELECT
+            pda,
+            from_address,
+            to_address,
+            original_amount,
+            remaining_amount,
+            status,
+            created_at,
+            updated_at,
+            closed_at
+        FROM obligations
+        WHERE from_address = $1 OR to_address = $1
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(wallet)
+    .fetch_all(db_pool.get_ref())
+    .await;
+
+    match rows {
+        Ok(data) => HttpResponse::Ok().json(ApiResponse::success(data)),
+        Err(err) => {
+            tracing::error!("Failed to fetch obligations from DB: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
+}
+
+pub async fn get_last_clearing_audit(
+    worker_state: web::Data<Arc<tokio::sync::RwLock<WorkerState>>>,
+) -> impl Responder {
+    let result = {
+        let s = worker_state.read().await;
+        s.last_session_result.clone()
+    };
+    HttpResponse::Ok().json(ApiResponse::success(result))
+}
+
+pub async fn get_last_clearing_audit_for_wallet(
+    worker_state: web::Data<Arc<tokio::sync::RwLock<WorkerState>>>,
+    db_pool: web::Data<PgPool>,
+    wallet: web::Path<String>,
+) -> impl Responder {
+    let wallet = wallet.into_inner();
+    let result = {
+        let s = worker_state.read().await;
+        s.last_session_result.clone()
+    };
+    let mut obligation_ids: Vec<String> = result
+        .data
+        .iter()
+        .map(|x| x.obligation.clone())
+        .collect();
+    obligation_ids.extend(result.internal_data.iter().map(|x| x.obligation.clone()));
+    if obligation_ids.is_empty() {
+        return HttpResponse::Ok().json(ApiResponse::success(result));
+    }
+
+    let matching: Vec<String> = match sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT pda
+        FROM obligations
+        WHERE pda = ANY($1) AND (from_address = $2 OR to_address = $2)
+        "#,
+    )
+    .bind(&obligation_ids)
+    .bind(&wallet)
+    .fetch_all(db_pool.get_ref())
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!("Failed to filter audit by wallet: {err:?}");
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()));
+        }
+    };
+
+    let matched: HashSet<String> = matching.into_iter().collect();
+    let mut filtered = result.clone();
+    filtered.data.retain(|x| matched.contains(&x.obligation));
+    filtered
+        .internal_data
+        .retain(|x| matched.contains(&x.obligation));
+    filtered
+        .merkle_leaves
+        .retain(|x| matched.contains(&x.obligation));
+
+    HttpResponse::Ok().json(ApiResponse::success(filtered))
+}
+
+pub async fn list_clearing_sessions(db_pool: web::Data<PgPool>) -> impl Responder {
+    match sqlx::query_as::<_, DbClearingSessionRow>(
+        r#"
+        SELECT session_id, result_id, result_hash, merkle_root, external_count, internal_count, created_at
+        FROM clearing_sessions
+        ORDER BY session_id DESC
+        LIMIT 100
+        "#,
+    )
+    .fetch_all(db_pool.get_ref())
+    .await
+    {
+        Ok(rows) => HttpResponse::Ok().json(ApiResponse::success(rows)),
+        Err(err) => {
+            tracing::error!("Failed to list clearing sessions: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
+}
+
+pub async fn get_clearing_session_payload(
+    db_pool: web::Data<PgPool>,
+    session_id: web::Path<i64>,
+) -> impl Responder {
+    let sid = session_id.into_inner();
+    match sqlx::query_scalar::<_, serde_json::Value>(
+        r#"
+        SELECT payload
+        FROM clearing_sessions
+        WHERE session_id = $1
+        "#,
+    )
+    .bind(sid)
+    .fetch_optional(db_pool.get_ref())
+    .await
+    {
+        Ok(Some(payload)) => HttpResponse::Ok().json(ApiResponse::success(payload)),
+        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<String>::error("session not found".into())),
+        Err(err) => {
+            tracing::error!("Failed to fetch session payload: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
 }

@@ -1,26 +1,14 @@
-FROM ubuntu:22.04
+FROM rust:1.91-slim-bookworm AS base
 
-# Базовые зависимости
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    build-essential \
-    libssl-dev \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-# Установка Solana через официальный скрипт
-RUN curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
-
-# Добавляем Solana в PATH
-ENV PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
-
-# Проверка (необязательно, но полезно)
-# RUN solana --version
+COPY docker/install-anchor-toolchain.sh /tmp/install-anchor-toolchain.sh
+RUN bash /tmp/install-anchor-toolchain.sh && rm /tmp/install-anchor-toolchain.sh
 
 WORKDIR /app
-
 COPY . .
 
-CMD ["sleep", "infinity"]
-# CMD ["anchor", "build"]
+FROM base AS build
+RUN anchor build
+
+FROM build AS deploy
+# Anchor migrate = deploy + execute migrations/deploy.ts
+CMD ["sh", "-c", "anchor migrate --provider.cluster ${SOLANA_URL:-http://localnet:8899}"]

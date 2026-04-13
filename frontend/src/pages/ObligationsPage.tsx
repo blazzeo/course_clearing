@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { cancelObligation, confirmObligation, declineObligation, getObligationsByParticipantFromPools, useProgram } from '../api'
-import { Obligation, ObligationStatus } from '../interfaces'
+import { cancelObligation, confirmObligation, declineObligation, getLastClearingAudit, getObligationsByParticipantFromDb, getObligationsByParticipantFromPools, useProgram } from '../api'
+import { ClearingAuditResult, Obligation, ObligationStatus } from '../interfaces'
 import { ClipLoader } from "react-spinners";
+import { API_URL } from '../main'
 
 export function MapObligationStatus(status: ObligationStatus) {
     switch (status) {
@@ -24,6 +25,7 @@ export default function ObligationsPage() {
     const [loading, setLoading] = useState(true)
     const [filter, setFilter] = useState<ObligationStatus>(ObligationStatus.All)
     const [actionLoading, setActionLoading] = useState<Obligation | null>(null)
+    const [userAudit, setUserAudit] = useState<ClearingAuditResult | null>(null)
 
     const { publicKey } = useWallet()
     const program = useProgram()
@@ -49,10 +51,22 @@ export default function ObligationsPage() {
 
         try {
             setLoading(true)
-
-            const obligations = await getObligationsByParticipantFromPools(program, publicKey)
+            let obligations: Obligation[] = []
+            try {
+                obligations = await getObligationsByParticipantFromDb(API_URL, publicKey)
+            } catch (dbError) {
+                console.warn('DB obligations fetch failed, fallback to on-chain scan', dbError)
+                obligations = await getObligationsByParticipantFromPools(program, publicKey)
+            }
 
             setAllObligations(obligations)
+            try {
+                const audit = await getLastClearingAudit(API_URL, publicKey)
+                setUserAudit(audit)
+            } catch (auditError) {
+                console.warn('Failed to load user clearing audit', auditError)
+                setUserAudit(null)
+            }
         } catch (error) {
             console.error('Error loading obligations:', error)
         } finally {
@@ -175,6 +189,27 @@ export default function ObligationsPage() {
     return (
         <div>
             <div className="card">
+                {userAudit && (
+                    <div style={{ marginBottom: '20px', padding: '12px', background: '#f8f9ff', borderRadius: '8px', border: '1px solid #dfe4ff' }}>
+                        <h3 style={{ marginBottom: '8px', color: '#333' }}>Последняя сессия клиринга (ваши данные)</h3>
+                        <p style={{ marginBottom: '6px', color: '#555' }}>
+                            Session #{userAudit.session_id}, external: {userAudit.data.length}, internal: {userAudit.internal_data.length}
+                        </p>
+                        <p style={{ marginBottom: '8px', color: '#333', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                            Merkle root: {userAudit.merkle_root || '-'}
+                        </p>
+                        <details>
+                            <summary style={{ cursor: 'pointer', color: '#667eea' }}>Показать шаги сессии</summary>
+                            <div style={{ marginTop: '8px', maxHeight: '140px', overflowY: 'auto' }}>
+                                {userAudit.audit_log.map((entry, idx) => (
+                                    <div key={`${entry.step}-${idx}`} style={{ fontSize: '13px', color: '#444', marginBottom: '4px' }}>
+                                        <b>{entry.step}</b>: {entry.detail}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                     <h1 style={{ color: '#333' }}>Клиринговые позиции</h1>
                     <Link to="/obligations/create" className="btn btn-primary">

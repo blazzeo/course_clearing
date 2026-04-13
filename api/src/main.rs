@@ -58,7 +58,7 @@ async fn main() -> std::io::Result<()> {
         .expect("Can't run migrations");
 
     let worker_state = Arc::new(tokio::sync::RwLock::new(
-        WorkerState::new(rpc_client)
+        WorkerState::new(rpc_client, db_pool.clone())
             .await
             .expect("Can't init worker state"),
     ));
@@ -90,6 +90,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(solana_rpc_url.clone()))
+            .app_data(web::Data::new(db_pool.clone()))
             .app_data(web::Data::new(worker_state.clone()))
             .app_data(web::Data::new(admin_pubkey.clone()))
             .app_data(web::Data::new(sender.clone()))
@@ -106,6 +107,26 @@ async fn main() -> std::io::Result<()> {
             .service(web::scope("/api").route(
                 "/clearing/last",
                 web::post().to(handlers::get_last_clearing_result),
+            ))
+            .service(web::scope("/api").route(
+                "/obligations/{wallet}",
+                web::get().to(handlers::get_obligations_by_wallet),
+            ))
+            .service(web::scope("/api").route(
+                "/clearing/audit/last",
+                web::get().to(handlers::get_last_clearing_audit),
+            ))
+            .service(web::scope("/api").route(
+                "/clearing/audit/last/{wallet}",
+                web::get().to(handlers::get_last_clearing_audit_for_wallet),
+            ))
+            .service(web::scope("/api").route(
+                "/clearing/sessions",
+                web::get().to(handlers::list_clearing_sessions),
+            ))
+            .service(web::scope("/api").route(
+                "/clearing/sessions/{session_id}",
+                web::get().to(handlers::get_clearing_session_payload),
             ))
     })
     .bind(format!("0.0.0.0:{}", port))?
