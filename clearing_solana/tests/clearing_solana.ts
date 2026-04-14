@@ -6,9 +6,9 @@ import { createHash } from "crypto";
 import { expect } from "chai";
 
 describe("clearing_solana", () => {
-  anchor.setProvider(anchor.AnchorProvider.env());
+	anchor.setProvider(anchor.AnchorProvider.env());
   const provider = anchor.getProvider() as anchor.AnchorProvider;
-  const program = anchor.workspace.clearingSolana as Program<ClearingSolana>;
+	const program = anchor.workspace.clearingSolana as Program<ClearingSolana>;
   const admin = provider.wallet;
 
   const statePda = PublicKey.findProgramAddressSync(
@@ -732,5 +732,5 @@ describe("clearing_solana", () => {
     for (const p of positions) {
       expect(Number(p.netAmount.toString())).eq(0);
     }
-  });
+	});
 });

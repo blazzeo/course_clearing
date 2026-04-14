@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-import { applyInternalNetting, buildApplyInternalNettingTx, buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingSessionPayload, getClearingState, getLastClearingAudit, getPool, getPoolPda, getUserRole, listClearingSessions, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
-import { ClearingAuditResult, ClearingSessionSummary, Participant, UserType, UserTypeToString } from '../interfaces'
+import { applyInternalNetting, buildApplyInternalNettingTx, buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
+import { ClearingAuditResult, Participant, UserType, UserTypeToString } from '../interfaces'
 import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
 
@@ -41,9 +41,9 @@ function formatTimeExtended(seconds: number): string {
 }
 
 export default function AdminPanel() {
-    const shortKey = (value: string) => `${value.slice(0, 6)}...${value.slice(-6)}`;
-    const fmtSol = (lamports: number) => `${(lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
-    const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU');
+    // const shortKey = (value: string) => `${value.slice(0, 6)}...${value.slice(-6)}`;
+    // const fmtSol = (lamports: number) => `${(lamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`;
+    // const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString('ru-RU');
 
     interface ClearingApiResponse {
         success: boolean;
@@ -51,6 +51,16 @@ export default function AdminPanel() {
             session_id: number;
             result_id: string;
             hash: string;
+            solver_version?: string;
+            build_sha?: string;
+            input_obligations?: {
+                obligation: string;
+                from: string;
+                to: string;
+                amount: number;
+                status: string;
+                timestamp: number;
+            }[];
             data: { obligation: string; amount: number }[];
             internal_data: { obligation: string; amount: number }[];
             merkle_root?: string;
@@ -60,6 +70,22 @@ export default function AdminPanel() {
         };
         error?: string;
     }
+
+    /** POST /clearing/run|last уже возвращает тот же объект, что и GET audit — без второго запроса (избегаем 404 от прокси/старых образов). */
+    const auditFromClearingApiData = (r: NonNullable<ClearingApiResponse["data"]>): ClearingAuditResult => ({
+        session_id: r.session_id,
+        result_id: r.result_id,
+        hash: r.hash,
+        solver_version: r.solver_version,
+        build_sha: r.build_sha,
+        input_obligations: r.input_obligations,
+        data: r.data,
+        internal_data: r.internal_data ?? [],
+        merkle_root: r.merkle_root ?? "",
+        merkle_leaves: r.merkle_leaves ?? [],
+        audit_log: r.audit_log ?? [],
+        timestamp: r.timestamp,
+    });
 
     const [allUsers, setAllUsers] = useState<Participant[]>([])
     const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([])
@@ -82,9 +108,6 @@ export default function AdminPanel() {
     const [lastHandledResultTimestamp, setLastHandledResultTimestamp] = useState<number | null>(null)
     const [lastHandledResultId, setLastHandledResultId] = useState<string | null>(null)
     const [lastAudit, setLastAudit] = useState<ClearingAuditResult | null>(null)
-    const [sessions, setSessions] = useState<ClearingSessionSummary[]>([])
-    const [sessionsLoading, setSessionsLoading] = useState(false)
-    const [expandedSessions, setExpandedSessions] = useState<Record<number, ClearingAuditResult>>({})
 
     const { publicKey, signMessage, signAllTransactions } = useWallet()
     const program = useProgram()
@@ -137,30 +160,6 @@ export default function AdminPanel() {
         }
     }
 
-    const loadSessionHistory = async () => {
-        try {
-            setSessionsLoading(true)
-            const rows = await listClearingSessions(API_URL)
-            setSessions(rows)
-        } catch (error) {
-            console.error('Error loading clearing sessions:', error)
-            toast.error('Не удалось загрузить историю сессий')
-        } finally {
-            setSessionsLoading(false)
-        }
-    }
-
-    const openSession = async (sessionId: number) => {
-        if (expandedSessions[sessionId]) return;
-        try {
-            const payload = await getClearingSessionPayload(API_URL, sessionId)
-            setExpandedSessions(prev => ({ ...prev, [sessionId]: payload }))
-        } catch (error) {
-            console.error(`Error loading session payload #${sessionId}:`, error)
-            toast.error(`Не удалось загрузить сессию #${sessionId}`)
-        }
-    }
-
     const signAdminRequest = async () => {
         if (!publicKey || !signMessage) {
             throw new Error("Кошелек не найден")
@@ -173,60 +172,6 @@ export default function AdminPanel() {
         const signatureBase64 = btoa(String.fromCharCode(...signature));
         return { message, signature: signatureBase64, nonce, timestamp };
     }
-
-    const renderSessionDetails = (audit: ClearingAuditResult) => (
-        <div style={{ marginTop: '10px', fontSize: '13px', color: '#333', display: 'grid', gap: '10px' }}>
-            <div style={{ background: '#f8fafc', borderRadius: '6px', padding: '8px' }}>
-                <div><b>Result hash:</b> <span style={{ fontFamily: 'monospace' }}>{audit.hash}</span></div>
-                <div><b>Merkle root:</b> <span style={{ fontFamily: 'monospace' }}>{audit.merkle_root || '-'}</span></div>
-                <div><b>Solver:</b> {audit.solver_version || 'n/a'} | <b>Build:</b> {audit.build_sha || 'n/a'}</div>
-                <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
-            </div>
-
-            {!!audit.input_obligations?.length && (
-                <details>
-                    <summary style={{ cursor: 'pointer' }}>Входные обязательства ({audit.input_obligations.length})</summary>
-                    <table style={{ width: '100%', marginTop: '6px', borderCollapse: 'collapse' }}>
-                        <thead><tr><th>Obligation</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr></thead>
-                        <tbody>
-                            {audit.input_obligations.map((x) => (
-                                <tr key={x.obligation}>
-                                    <td>{shortKey(x.obligation)}</td>
-                                    <td>{shortKey(x.from)}</td>
-                                    <td>{shortKey(x.to)}</td>
-                                    <td>{fmtSol(x.amount)}</td>
-                                    <td>{x.status}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </details>
-            )}
-
-            <details>
-                <summary style={{ cursor: 'pointer' }}>External allocations ({audit.data.length})</summary>
-                <ul>
-                    {audit.data.map((x) => <li key={`ex-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
-                </ul>
-            </details>
-
-            <details>
-                <summary style={{ cursor: 'pointer' }}>Internal nettings ({audit.internal_data.length})</summary>
-                <ul>
-                    {audit.internal_data.map((x) => <li key={`in-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
-                </ul>
-            </details>
-
-            <details>
-                <summary style={{ cursor: 'pointer' }}>Audit timeline ({audit.audit_log.length})</summary>
-                <ul>
-                    {audit.audit_log.map((entry, idx) => (
-                        <li key={`${entry.step}-${idx}`}><b>{entry.step}</b> [{fmtTs(entry.timestamp)}]: {entry.detail}</li>
-                    ))}
-                </ul>
-            </details>
-        </div>
-    );
 
     const isResultFresh = (ts: number): boolean => {
         const now = Math.floor(Date.now() / 1000);
@@ -392,6 +337,9 @@ export default function AdminPanel() {
             logClearing(requestId, "handler started");
 
             const result = await fetchClearingResult(requestId, "run");
+
+            if (!result) throw 'Не удалось получить результат клиринга'
+
             if (lastHandledResultId !== null && result.result_id === lastHandledResultId) {
                 logClearing(requestId, "skipped: same result_id", {
                     resultId: result.result_id,
@@ -419,8 +367,7 @@ export default function AdminPanel() {
             await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
             setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
-            const audit = await getLastClearingAudit(API_URL);
-            setLastAudit(audit);
+            setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
                 processed: result.data.length + (result.internal_data?.length || 0),
             });
@@ -445,6 +392,8 @@ export default function AdminPanel() {
             setActionLoading(true)
             logClearing(requestId, "handler started");
             const result = await fetchClearingResult(requestId, "last");
+
+            if (!result) throw 'Не удалось получить результат клиринга'
 
             if (lastHandledResultId !== null && result.result_id === lastHandledResultId) {
                 logClearing(requestId, "skipped: same result_id", {
@@ -479,8 +428,7 @@ export default function AdminPanel() {
             await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
             setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
-            const audit = await getLastClearingAudit(API_URL);
-            setLastAudit(audit);
+            setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
                 processed: result.data.length + (result.internal_data?.length || 0),
             });
@@ -497,7 +445,6 @@ export default function AdminPanel() {
         if (isAdmin) {
             loadAllUsers()
             loadSystemSettings()
-            loadSessionHistory()
         }
     }, [isAdmin])
 
@@ -994,58 +941,6 @@ export default function AdminPanel() {
                                     </div>
                                 </div>
                             )}
-                            <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                                    <h3 style={{ margin: 0 }}>История клиринговых сессий</h3>
-                                    <button
-                                        onClick={loadSessionHistory}
-                                        disabled={sessionsLoading}
-                                        style={{
-                                            padding: '8px 14px',
-                                            background: sessionsLoading ? '#ccc' : '#667eea',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '4px',
-                                            cursor: sessionsLoading ? 'not-allowed' : 'pointer'
-                                        }}
-                                    >
-                                        {sessionsLoading ? 'Обновление...' : 'Обновить список'}
-                                    </button>
-                                </div>
-                                {sessionsLoading ? (
-                                    <p style={{ color: '#666' }}>Загрузка истории...</p>
-                                ) : sessions.length === 0 ? (
-                                    <p style={{ color: '#666' }}>Сессии пока не найдены</p>
-                                ) : (
-                                    <div style={{ display: 'grid', gap: '10px' }}>
-                                        {sessions.map((s) => (
-                                            <details
-                                                key={s.session_id}
-                                                onToggle={(e) => {
-                                                    if ((e.currentTarget as HTMLDetailsElement).open) {
-                                                        openSession(s.session_id);
-                                                    }
-                                                }}
-                                                style={{ border: '1px solid #e8e8e8', borderRadius: '6px', padding: '10px' }}
-                                            >
-                                                <summary style={{ cursor: 'pointer', color: '#333' }}>
-                                                    Session #{s.session_id} | result: {s.result_id} | ext: {s.external_count}, int: {s.internal_count}
-                                                </summary>
-                                                <div style={{ marginTop: '10px', fontSize: '13px', color: '#444' }}>
-                                                    <div>Hash: <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{s.result_hash}</span></div>
-                                                    <div>Merkle root: <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{s.merkle_root}</span></div>
-                                                    <div>Created: {new Date(s.created_at * 1000).toLocaleString('ru-RU')}</div>
-                                                    {expandedSessions[s.session_id] ? (
-                                                        renderSessionDetails(expandedSessions[s.session_id])
-                                                    ) : (
-                                                        <div style={{ marginTop: '8px', color: '#999' }}>Загрузка деталей...</div>
-                                                    )}
-                                                </div>
-                                            </details>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
 
                             {/* Вывод комиссий */}
                             <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>

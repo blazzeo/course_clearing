@@ -228,6 +228,38 @@ pub async fn get_obligations_by_wallet(
     }
 }
 
+pub async fn get_all_obligations(
+    db_pool: web::Data<PgPool>,
+) -> impl Responder {
+    let rows = sqlx::query_as::<_, DbObligationRecord>(
+        r#"
+        SELECT
+            pda,
+            from_address,
+            to_address,
+            original_amount,
+            remaining_amount,
+            status,
+            created_at,
+            updated_at,
+            closed_at
+        FROM obligations
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(db_pool.get_ref())
+    .await;
+
+    match rows {
+        Ok(data) => HttpResponse::Ok().json(ApiResponse::success(data)),
+        Err(err) => {
+            tracing::error!("Failed to fetch all obligations from DB: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
+}
+
 pub async fn get_last_clearing_audit(
     worker_state: web::Data<Arc<tokio::sync::RwLock<WorkerState>>>,
 ) -> impl Responder {

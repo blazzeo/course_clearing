@@ -1,94 +1,112 @@
 use crate::models::RawSettlement;
 use solana_sdk::pubkey::Pubkey;
+use std::collections::BTreeMap;
 
-/// Основная функция неттинга.
+/// Неттинг по схеме **pure_expense_glade** (итеративный глейд с минимальной издержкой на шаге):
+/// на каждой итерации выбирается пара (дебитор, кредитор) с минимальным `cost(from,to)`,
+/// переносится `min(остаток_дебитора, остаток_кредитора)`, остатки уменьшаются до нуля.
 ///
-/// - `participants` и `amounts` должны иметь одинаковую длину.
-/// - Положительные amounts => участник должен получить деньги (creditor).
-/// - Отрицательные amounts => участник должен заплатить (debtor).
+/// Вход:
+/// - `participants` и `amounts` одинаковой длины;
+/// - `amounts[i] > 0` — участник **кредитор** (должен получить нетто);
+/// - `amounts[i] < 0` — участник **дебитор** (должен заплатить нетто).
 ///
-/// Возвращает список переводов (from -> to : amount).
+/// Рёбра итоговой матрицы погашения **сливаются** по паре `(from, to)` для компактного плана.
 pub fn netting_clearing(
     participants: &[Pubkey],
     amounts: &[i64],
 ) -> Result<Vec<RawSettlement>, Box<dyn std::error::Error>> {
-    // валидация входа
+    netting_clearing_with_cost(participants, amounts, |_from, _to| 1i128)
+}
+
+/// То же, что [`netting_clearing`], но с произвольной матрицей издержек `C[from][to]`.
+pub fn netting_clearing_with_cost(
+    participants: &[Pubkey],
+    amounts: &[i64],
+    cost: impl Fn(Pubkey, Pubkey) -> i128,
+) -> Result<Vec<RawSettlement>, Box<dyn std::error::Error>> {
     if participants.len() != amounts.len() {
         return Err("participants and amounts length mismatch".into());
     }
 
-    // соберём пары адрес/amount
-    let mut entries: Vec<(Pubkey, i64)> = participants
-        .iter()
-        .cloned()
-        .zip(amounts.iter().cloned())
-        .collect();
+    let mut debit_remaining: BTreeMap<Pubkey, i64> = BTreeMap::new();
+    let mut credit_remaining: BTreeMap<Pubkey, i64> = BTreeMap::new();
 
-    // фильтруем нулевые позиции (уже уравновешены)
-    entries.retain(|(_, amt)| *amt != 0);
-
-    // // проверим, что суммарно всё уравновешено (в идеале да).
-    // let total: i128 = entries.iter().map(|(_, a)| *a as i128).sum();
-    // if total != 0 {
-    //     // если сумма != 0 — пока возвращаем ошибку, можно изменить поведение (например масштабировать или оставить остаток)
-    //     return Err(format!("positions not balanced, total sum = {}", total).into());
-    // }
-
-    // создадим списки кредиторов и должников
-    // кредитор: amt > 0 (получает), должник: amt < 0 (платит)
-    let mut creditors: Vec<(Pubkey, i64)> = entries
-        .iter()
-        .filter(|(_, amt)| *amt > 0)
-        .map(|(a, amt)| (a.clone(), *amt))
-        .collect();
-
-    let mut debtors: Vec<(Pubkey, i64)> = entries
-        .iter()
-        .filter(|(_, amt)| *amt < 0)
-        .map(|(a, amt)| (a.clone(), -*amt)) // хранить положительную величину долга
-        .collect();
-
-    // сортируем кредиторов по убыванию (большие сначала), должников — по убыванию (большие должники сначала)
-    creditors.sort_by(|a, b| b.1.cmp(&a.1));
-    debtors.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let mut settlements: Vec<RawSettlement> = Vec::new();
-
-    // индексные итераторы для обоих списков
-    let mut ci = 0usize;
-    let mut di = 0usize;
-
-    while ci < creditors.len() && di < debtors.len() {
-        let (cred_addr, cred_amt) = &creditors[ci];
-        let (deb_addr, deb_amt) = &debtors[di];
-
-        let transfer = std::cmp::min(*cred_amt, *deb_amt);
-        let transfer_u64: u64 = transfer.try_into().expect("transfer must be >= 0");
-
-        // добавляем транзакцию: debtor -> creditor
-        settlements.push(RawSettlement {
-            from_address: *deb_addr,
-            to_address: *cred_addr,
-            amount: transfer_u64,
-        });
-
-        // уменьшаем остатки
-        creditors[ci].1 -= transfer;
-        debtors[di].1 -= transfer;
-
-        // если один из них обнуляется — продвигаем индекс
-        if creditors[ci].1 == 0 {
-            ci += 1;
-        }
-        if debtors[di].1 == 0 {
-            di += 1;
+    for (p, &amt) in participants.iter().zip(amounts.iter()) {
+        if amt > 0 {
+            credit_remaining.insert(*p, amt);
+        } else if amt < 0 {
+            debit_remaining.insert(*p, -amt);
         }
     }
 
-    creditors.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    debtors.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut settlements: Vec<RawSettlement> = Vec::new();
 
-    Ok(settlements)
+    loop {
+        let mut best: Option<(i128, [u8; 32], [u8; 32], Pubkey, Pubkey)> = None;
+
+        for (&d, &rd) in &debit_remaining {
+            if rd <= 0 {
+                continue;
+            }
+            for (&c, &rc) in &credit_remaining {
+                if rc <= 0 {
+                    continue;
+                }
+                let unit_cost = cost(d, c);
+                let cand = (unit_cost, d.to_bytes(), c.to_bytes(), d, c);
+                match &best {
+                    None => best = Some(cand),
+                    Some(b) if cand < *b => best = Some(cand),
+                    _ => {}
+                }
+            }
+        }
+
+        let Some((_cost, _db, _cb, d, c)) = best else {
+            break;
+        };
+
+        let rd = *debit_remaining.get(&d).unwrap_or(&0);
+        let rc = *credit_remaining.get(&c).unwrap_or(&0);
+        if rd <= 0 || rc <= 0 {
+            break;
+        }
+
+        let transfer = std::cmp::min(rd, rc);
+        let transfer_u64: u64 = transfer.try_into().map_err(|_| "transfer overflow")?;
+
+        settlements.push(RawSettlement {
+            from_address: d,
+            to_address: c,
+            amount: transfer_u64,
+        });
+
+        debit_remaining.insert(d, rd - transfer);
+        credit_remaining.insert(c, rc - transfer);
+        if debit_remaining[&d] <= 0 {
+            debit_remaining.remove(&d);
+        }
+        if credit_remaining[&c] <= 0 {
+            credit_remaining.remove(&c);
+        }
+    }
+
+    Ok(merge_settlements(settlements))
+}
+
+fn merge_settlements(items: Vec<RawSettlement>) -> Vec<RawSettlement> {
+    let mut acc: BTreeMap<(Pubkey, Pubkey), u64> = BTreeMap::new();
+    for s in items {
+        *acc.entry((s.from_address, s.to_address)).or_insert(0) += s.amount;
+    }
+    acc.into_iter()
+        .map(|((from_address, to_address), amount)| RawSettlement {
+            from_address,
+            to_address,
+            amount,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -310,5 +328,36 @@ mod tests {
         let amounts = vec![-11, -4, 8, 7];
         let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
         assert_conservation(&participants, &amounts, &settlements);
+    }
+
+    /// Нетто после цепочки обязательств 6+1−2 (как в статье Новиковой/Смеловой): u1: −7, u2: +4, u3: +3.
+    /// Оптимальный план погашения — два перевода от u1 суммарно 7 (4 к u2 и 3 к u3 или в обратном порядке).
+    #[test]
+    fn netting_novikova_style_three_party_net_vector() {
+        let user1 = pk("11111111111111111111111111111111");
+        let user2 = pk("So11111111111111111111111111111111111111112");
+        let user3 = pk("Sysvar1111111111111111111111111111111111111");
+        let participants = vec![user1, user2, user3];
+        let amounts = vec![-7, 4, 3];
+
+        let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
+        assert_eq!(settlements.len(), 2);
+        assert_conservation(&participants, &amounts, &settlements);
+
+        let mut to_u2 = 0u64;
+        let mut to_u3 = 0u64;
+        for s in &settlements {
+            assert_eq!(s.from_address, user1);
+            if s.to_address == user2 {
+                to_u2 += s.amount;
+            } else if s.to_address == user3 {
+                to_u3 += s.amount;
+            } else {
+                panic!("unexpected edge {:?}", s);
+            }
+        }
+        assert_eq!(to_u2 + to_u3, 7);
+        assert_eq!(to_u2, 4);
+        assert_eq!(to_u3, 3);
     }
 }

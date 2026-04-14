@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
@@ -19,11 +19,20 @@ export function MapObligationStatus(status: ObligationStatus) {
     }
 }
 
+function startOfLocalDaySec(isoDate: string): number {
+    return Math.floor(new Date(`${isoDate}T00:00:00`).getTime() / 1000)
+}
+
+function endOfLocalDaySec(isoDate: string): number {
+    return Math.floor(new Date(`${isoDate}T23:59:59.999`).getTime() / 1000)
+}
+
 export default function ObligationsPage() {
     const [allObligations, setAllObligations] = useState<Obligation[]>([])
-    const [filteredObligations, setFilteredObligations] = useState<Obligation[]>([])
     const [loading, setLoading] = useState(true)
     const [filter, setFilter] = useState<ObligationStatus>(ObligationStatus.All)
+    const [dateFrom, setDateFrom] = useState<string>('')
+    const [dateTo, setDateTo] = useState<string>('')
     const [actionLoading, setActionLoading] = useState<Obligation | null>(null)
     const [userAudit, setUserAudit] = useState<ClearingAuditResult | null>(null)
 
@@ -34,15 +43,27 @@ export default function ObligationsPage() {
         loadPositions()
     }, [publicKey])
 
-    useEffect(() => {
-        if (String(filter) === String(ObligationStatus.All)) {
-            setFilteredObligations(allObligations)
-            return
+    const filteredObligations = useMemo(() => {
+        let list = allObligations
+        if (String(filter) !== String(ObligationStatus.All)) {
+            list = list.filter((o) => String(o.status) === String(filter))
         }
-
-        const filtered = allObligations.filter(o => String(o.status) === String(filter))
-        setFilteredObligations(filtered)
-    }, [filter, allObligations])
+        if (dateFrom) {
+            const fromSec = startOfLocalDaySec(dateFrom)
+            list = list.filter((o) => {
+                const ts = o.timestamp < 1_000_000_000_000 ? o.timestamp : Math.floor(o.timestamp / 1000)
+                return ts >= fromSec
+            })
+        }
+        if (dateTo) {
+            const toSec = endOfLocalDaySec(dateTo)
+            list = list.filter((o) => {
+                const ts = o.timestamp < 1_000_000_000_000 ? o.timestamp : Math.floor(o.timestamp / 1000)
+                return ts <= toSec
+            })
+        }
+        return list
+    }, [allObligations, filter, dateFrom, dateTo])
 
     const loadPositions = async () => {
         if (!publicKey || !program) {
@@ -217,21 +238,53 @@ export default function ObligationsPage() {
                     </Link>
                 </div>
 
-                <div style={{ marginBottom: '16px' }}>
-                    <label className="label">Фильтр по статусу:</label>
-                    <select
-                        className="input"
-                        value={filter}
-                        onChange={(e) => setFilter(parseInt(e.target.value))}
-                        style={{ width: 'auto', display: 'inline-block', marginLeft: '8px' }}
-                    >
-                        <option value={ObligationStatus.All}>Все</option>
-                        <option value={ObligationStatus.Created}>Ожидают подтверждения</option>
-                        <option value={ObligationStatus.Confirmed}>Подтверждены</option>
-                        <option value={ObligationStatus.PartiallyNetted}>Частично погашены</option>
-                        <option value={ObligationStatus.Netted}>Выполнены</option>
-                    </select>
+                <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
+                    <div>
+                        <label className="label">Фильтр по статусу:</label>
+                        <select
+                            className="input"
+                            value={filter}
+                            onChange={(e) => setFilter(parseInt(e.target.value))}
+                            style={{ width: 'auto', display: 'inline-block', marginLeft: '8px' }}
+                        >
+                            <option value={ObligationStatus.All}>Все</option>
+                            <option value={ObligationStatus.Created}>Ожидают подтверждения</option>
+                            <option value={ObligationStatus.Confirmed}>Подтверждены</option>
+                            <option value={ObligationStatus.PartiallyNetted}>Частично погашены</option>
+                            <option value={ObligationStatus.Netted}>Выполнены</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="label">С даты (создание):</label>
+                        <input
+                            type="date"
+                            className="input"
+                            value={dateFrom}
+                            onChange={(e) => setDateFrom(e.target.value)}
+                            style={{ marginLeft: '8px', width: 'auto' }}
+                        />
+                    </div>
+                    <div>
+                        <label className="label">По дату:</label>
+                        <input
+                            type="date"
+                            className="input"
+                            value={dateTo}
+                            onChange={(e) => setDateTo(e.target.value)}
+                            style={{ marginLeft: '8px', width: 'auto' }}
+                        />
+                    </div>
+                    {(dateFrom || dateTo) && (
+                        <button type="button" className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo('') }}>
+                            Сбросить даты
+                        </button>
+                    )}
                 </div>
+                <p style={{ fontSize: '13px', color: '#555', marginBottom: '16px', maxWidth: '720px' }}>
+                    Данные из API: в таблице по умолчанию показан <strong>остаток</strong> по обязательству (
+                    <code>remaining_amount</code>
+                    ). После клиринга он может стать <strong>0 SOL</strong>, при этом исходная сумма была ненулевой — смотрите колонку «Сумма» (остаток / номинал) и ответ в консоли браузера при загрузке страницы.
+                </p>
 
                 {loading ? (
                     <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>
@@ -248,7 +301,7 @@ export default function ObligationsPage() {
                             <tr>
                                 <th>Дебитор</th>
                                 <th>Кредитор</th>
-                                <th>Сумма</th>
+                                <th>Сумма (остаток / номинал)</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
                                 <th>Действия</th>
@@ -256,7 +309,7 @@ export default function ObligationsPage() {
                         </thead>
                         <tbody>
                             {filteredObligations.map((obligation) => (
-                                <tr key={obligation.timestamp}>
+                                <tr key={obligation.pda.toBase58()}>
                                     <td>
                                         <Link to={`/participant/${obligation.from}`} style={{ color: '#667eea' }}>
                                             {obligation.from.toBase58().slice(0, 8)}...
@@ -267,7 +320,18 @@ export default function ObligationsPage() {
                                             {obligation.to.toBase58().slice(0, 8)}...
                                         </Link>
                                     </td>
-                                    <td>{obligation.amount / 1e9} SOL</td>
+                                    <td>
+                                        {obligation.originalAmount != null &&
+                                        obligation.originalAmount !== obligation.amount ? (
+                                            <span title="Остаток после неттинга / исходный номинал">
+                                                {(obligation.amount / 1e9).toFixed(4)} / {(obligation.originalAmount / 1e9).toFixed(4)} SOL
+                                            </span>
+                                        ) : obligation.amount === 0 && obligation.originalAmount != null && obligation.originalAmount > 0 ? (
+                                            <span title="Полностью погашено по клирингу">0 (было {(obligation.originalAmount / 1e9).toFixed(4)} SOL)</span>
+                                        ) : (
+                                            <span>{(obligation.amount / 1e9).toFixed(4)} SOL</span>
+                                        )}
+                                    </td>
                                     <td>
                                         <span className={getStatusClass(obligation.status)}>
                                             {MapObligationStatus(obligation.status)}

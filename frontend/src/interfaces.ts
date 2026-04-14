@@ -15,7 +15,10 @@ export interface Obligation {
     status: ObligationStatus;
     from: PublicKey;
     to: PublicKey;
+    /** Текущий остаток по цепочке/БД (лампорты). Для записей из API это `remaining_amount`. */
     amount: number;
+    /** Исходный номинал при создании (только для строк из БД). */
+    originalAmount?: number;
     timestamp: number;
     sessionId: number;
     fromCancel: boolean;

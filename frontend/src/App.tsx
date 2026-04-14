@@ -5,8 +5,10 @@ import ObligationsPage from './pages/ObligationsPage'
 import CreateObligation from './pages/CreateObligation'
 import Bills from './pages/Bills'
 import AdminPanel from './pages/AdminPanel'
+import AdminObligationsPage from './pages/AdminObligationsPage'
+import AdminBillsPage from './pages/AdminBillsPage'
+import AdminSessionsPage from './pages/AdminSessionsPage'
 import Profile from './pages/Profile'
-import Funds from './pages/Funds'
 import AccessDenied from './pages/AccessDenied'
 
 import { useEffect } from 'react'
@@ -107,6 +109,36 @@ function App() {
                             userRole={userRole}
                         >
                             <AdminPanel />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/obligations" element={
+                        <ProtectedRoute
+                            requiredRoles={[UserType.Administator]}
+                            resource="/admin/obligations"
+                            requireWallet={true}
+                            userRole={userRole}
+                        >
+                            <AdminObligationsPage />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/bills" element={
+                        <ProtectedRoute
+                            requiredRoles={[UserType.Administator]}
+                            resource="/admin/bills"
+                            requireWallet={true}
+                            userRole={userRole}
+                        >
+                            <AdminBillsPage />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/sessions" element={
+                        <ProtectedRoute
+                            requiredRoles={[UserType.Administator]}
+                            resource="/admin/sessions"
+                            requireWallet={true}
+                            userRole={userRole}
+                        >
+                            <AdminSessionsPage />
                         </ProtectedRoute>
                     } />
 

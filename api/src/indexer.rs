@@ -2,7 +2,7 @@ use anchor_lang::{AnchorDeserialize, Discriminator};
 use base64::{engine::general_purpose, Engine as _};
 use clearing_solana::{
     ObligationCancelled, ObligationConfirmed, ObligationCreated, ObligationDeclined,
-    ObligationNetted, ParticipantRegistered, ID as PROGRAM_ID,
+    ObligationNetted, ObligationPartiallyNetted, ParticipantRegistered, ID as PROGRAM_ID,
 };
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,
@@ -19,6 +19,7 @@ enum IndexedEvent {
     ObligationDeclined(ObligationDeclined),
     ObligationCancelled(ObligationCancelled),
     ObligationNetted(ObligationNetted),
+    ObligationPartiallyNetted(ObligationPartiallyNetted),
 }
 
 fn extract_program_data(line: &str) -> Option<&str> {
@@ -50,6 +51,9 @@ fn decode_event_payload(data: &[u8]) -> Option<IndexedEvent> {
     }
     if let Some(e) = decode::<ObligationNetted>(data) {
         return Some(IndexedEvent::ObligationNetted(e));
+    }
+    if let Some(e) = decode::<ObligationPartiallyNetted>(data) {
+        return Some(IndexedEvent::ObligationPartiallyNetted(e));
     }
     None
 }
@@ -149,6 +153,17 @@ async fn persist_event(pool: &PgPool, signature: &str, event: IndexedEvent) -> a
                 "UPDATE obligations SET status = 'netted', remaining_amount = 0, closed_at = $2, updated_at = $2 WHERE pda = $1",
             )
             .bind(e.obligation.to_string())
+            .bind(e.timestamp)
+            .execute(pool)
+            .await?;
+        }
+        IndexedEvent::ObligationPartiallyNetted(e) => {
+            let rem = i64::try_from(e.remaining_amount).unwrap_or(i64::MAX);
+            sqlx::query(
+                "UPDATE obligations SET status = 'partially_netted', remaining_amount = $2, updated_at = $3 WHERE pda = $1",
+            )
+            .bind(e.obligation.to_string())
+            .bind(rem)
             .bind(e.timestamp)
             .execute(pool)
             .await?;

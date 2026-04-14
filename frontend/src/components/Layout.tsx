@@ -172,14 +172,34 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                     Админ панель
                                 </Link>
                                 <Link
-                                    to="/clearing/multi-party"
+                                    to="/admin/obligations"
                                     style={{
                                         textDecoration: 'none',
-                                        color: location.pathname === '/clearing/multi-party' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/clearing/multi-party' ? '600' : '400'
+                                        color: location.pathname === '/admin/obligations' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/admin/obligations' ? '600' : '400'
                                     }}
                                 >
-                                    Клиринг
+                                    Обязательства
+                                </Link>
+                                <Link
+                                    to="/admin/bills"
+                                    style={{
+                                        textDecoration: 'none',
+                                        color: location.pathname === '/admin/bills' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/admin/bills' ? '600' : '400'
+                                    }}
+                                >
+                                    Счета
+                                </Link>
+                                <Link
+                                    to="/admin/sessions"
+                                    style={{
+                                        textDecoration: 'none',
+                                        color: location.pathname === '/admin/sessions' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/admin/sessions' ? '600' : '400'
+                                    }}
+                                >
+                                    Сессии
                                 </Link>
                             </>
                         )}

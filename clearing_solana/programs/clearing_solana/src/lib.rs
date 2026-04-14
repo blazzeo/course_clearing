@@ -173,12 +173,22 @@ pub mod clearing_solana {
             .amount
             .checked_sub(amount)
             .ok_or(CustomErrors::MathOverflow)?;
+        let ts = Clock::get()?.unix_timestamp;
         if obligation.amount == 0 {
             obligation.status = ObligationStatus::Netted;
             let pool = &mut ctx.accounts.pool;
             pool.remove_obligation(obligation.key())?;
+            emit!(ObligationNetted {
+                obligation: obligation.key(),
+                timestamp: ts,
+            });
         } else {
             obligation.status = ObligationStatus::PartiallyNetted;
+            emit!(ObligationPartiallyNetted {
+                obligation: obligation.key(),
+                remaining_amount: obligation.amount,
+                timestamp: ts,
+            });
         }
 
         // Update pair position (debtor -> creditor)
@@ -242,16 +252,22 @@ pub mod clearing_solana {
             .amount
             .checked_sub(amount)
             .ok_or(CustomErrors::MathOverflow)?;
+        let ts = Clock::get()?.unix_timestamp;
         if obligation.amount == 0 {
             obligation.status = ObligationStatus::Netted;
             let pool = &mut ctx.accounts.pool;
             pool.remove_obligation(obligation.key())?;
             emit!(ObligationNetted {
                 obligation: obligation.key(),
-                timestamp: Clock::get()?.unix_timestamp
+                timestamp: ts,
             });
         } else {
             obligation.status = ObligationStatus::PartiallyNetted;
+            emit!(ObligationPartiallyNetted {
+                obligation: obligation.key(),
+                remaining_amount: obligation.amount,
+                timestamp: ts,
+            });
         }
         Ok(())
     }
@@ -1963,6 +1979,14 @@ pub struct ObligationCancelled {
 #[event]
 pub struct ObligationNetted {
     pub obligation: Pubkey,
+    pub timestamp: i64,
+}
+
+/// Списание через `create_position` оставило ненулевой остаток — для индексера БД.
+#[event]
+pub struct ObligationPartiallyNetted {
+    pub obligation: Pubkey,
+    pub remaining_amount: u64,
     pub timestamp: i64,
 }
 

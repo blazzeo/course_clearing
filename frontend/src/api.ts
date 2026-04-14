@@ -114,18 +114,36 @@ export async function registerObligation(
         .rpc();
 }
 
+async function resolveObligationSeedData(
+    program: Program<ClearingSolana>,
+    obligationPda: PublicKey,
+    fallback: Obligation
+): Promise<{ from: PublicKey; to: PublicKey; timestamp: BN }> {
+    try {
+        const onchain = await (program as any).account.obligation.fetch(obligationPda);
+        const from = onchain.from as PublicKey;
+        const to = onchain.to as PublicKey;
+        const timestamp = new BN(onchain.timestamp.toString());
+        return { from, to, timestamp };
+    } catch (error) {
+        // Fallback keeps legacy behavior if account read temporarily fails.
+        console.warn("Failed to fetch obligation account for seed preflight, using local values", error);
+        return {
+            from: fallback.from,
+            to: fallback.to,
+            timestamp: new BN(fallback.timestamp),
+        };
+    }
+}
+
 export async function confirmObligation(
     program: Program<ClearingSolana>,
     obligation: Obligation // Передаем весь объект целиком!
 ) {
     const authority = program.provider.publicKey;
     if (!authority) throw new Error("Wallet not connected");
-
-    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
-    const from = obligation.from;
-    const to = obligation.to;
-    // Используем BN напрямую, если он сохранился, или создаем новый
-    const tsBN = new BN(obligation.timestamp);
+    const obligationPda = obligation.pda;
+    const { from, to, timestamp: tsBN } = await resolveObligationSeedData(program, obligationPda, obligation);
 
     // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
     const [fromParticipant] = PublicKey.findProgramAddressSync(
@@ -137,9 +155,6 @@ export async function confirmObligation(
         [Buffer.from("participant"), to.toBuffer()],
         program.programId
     );
-
-    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
-    const obligationPda = obligation.pda;
 
     return await program.methods
         .confirmObligation(from, to, tsBN) // Эти аргументы используются для проверки seeds!
@@ -154,12 +169,9 @@ export async function confirmObligation(
 
 export async function cancelObligation(program: Program<ClearingSolana>, obligation: Obligation) {
     const authority = program.provider.publicKey;
-
-    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
-    const from = obligation.from;
-    const to = obligation.to;
-    // Используем BN напрямую, если он сохранился, или создаем новый
-    const tsBN = new BN(obligation.timestamp);
+    if (!authority) throw new Error("Wallet not connected");
+    const obligationPda = obligation.pda;
+    const { from, to, timestamp: tsBN } = await resolveObligationSeedData(program, obligationPda, obligation);
 
     // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
     const [fromParticipant] = PublicKey.findProgramAddressSync(
@@ -171,9 +183,6 @@ export async function cancelObligation(program: Program<ClearingSolana>, obligat
         [Buffer.from("participant"), to.toBuffer()],
         program.programId
     );
-
-    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
-    const obligationPda = obligation.pda;
 
     return await program.methods
         .cancelObligation(from, to, tsBN)
@@ -188,12 +197,9 @@ export async function cancelObligation(program: Program<ClearingSolana>, obligat
 
 export async function declineObligation(program: Program<ClearingSolana>, obligation: Obligation) {
     const authority = program.provider.publicKey;
-
-    // Берем данные ПРЯМО из объекта, который пришел из блокчейна
-    const from = obligation.from;
-    const to = obligation.to;
-    // Используем BN напрямую, если он сохранился, или создаем новый
-    const tsBN = new BN(obligation.timestamp);
+    if (!authority) throw new Error("Wallet not connected");
+    const obligationPda = obligation.pda;
+    const { from, to, timestamp: tsBN } = await resolveObligationSeedData(program, obligationPda, obligation);
 
     // Вычисляем PDA участников (они зависят только от Pubkey, тут ошибок обычно нет)
     const [fromParticipant] = PublicKey.findProgramAddressSync(
@@ -205,9 +211,6 @@ export async function declineObligation(program: Program<ClearingSolana>, obliga
         [Buffer.from("participant"), to.toBuffer()],
         program.programId
     );
-
-    // ВАЖНО: obligation.publicKey должен быть объектом PublicKey
-    const obligationPda = obligation.pda;
 
     return await program.methods
         .declineObligation(from, to, tsBN)
@@ -894,14 +897,22 @@ export async function getObligationsByParticipantFromPools(
     return result.sort((a, b) => b.timestamp - a.timestamp);
 }
 
+function logObligationsApiResponse(url: string, body: unknown) {
+    if (!import.meta.env.DEV) return;
+    const style = "color:#5c6bc0;font-weight:600";
+    console.groupCollapsed(`%c[API obligations]%c ${url}`, style, "color:inherit");
+    console.log(JSON.stringify(body, null, 2));
+    console.groupEnd();
+}
+
 export async function getObligationsByParticipantFromDb(
     apiUrl: string,
     participantKey: PublicKey
 ): Promise<Obligation[]> {
     const wallet = participantKey.toBase58();
-    const res = await axios.get<{ success: boolean; data?: DbObligationApiItem[]; error?: string }>(
-        `${apiUrl}/obligations/${wallet}`
-    );
+    const url = `${apiUrl}/obligations/${wallet}`;
+    const res = await axios.get<{ success: boolean; data?: DbObligationApiItem[]; error?: string }>(url);
+    logObligationsApiResponse(url, res.data);
     if (!res.data.success || !res.data.data) {
         throw new Error(res.data.error || "Failed to load obligations from DB");
     }
@@ -912,6 +923,30 @@ export async function getObligationsByParticipantFromDb(
         from: new PublicKey(row.from_address),
         to: new PublicKey(row.to_address),
         amount: row.remaining_amount,
+        originalAmount: row.original_amount,
+        timestamp: row.created_at,
+        sessionId: 0,
+        fromCancel: false,
+        toCancel: false,
+        poolId: 0,
+        bump: 0,
+    }));
+}
+
+export async function getAllObligationsFromDb(apiUrl: string): Promise<Obligation[]> {
+    const url = `${apiUrl}/obligations`;
+    const res = await axios.get<{ success: boolean; data?: DbObligationApiItem[]; error?: string }>(url);
+    logObligationsApiResponse(url, res.data);
+    if (!res.data.success || !res.data.data) {
+        throw new Error(res.data.error || "Failed to load obligations from DB");
+    }
+    return res.data.data.map((row) => ({
+        pda: new PublicKey(row.pda),
+        status: parseDbObligationStatus(row.status),
+        from: new PublicKey(row.from_address),
+        to: new PublicKey(row.to_address),
+        amount: row.remaining_amount,
+        originalAmount: row.original_amount,
         timestamp: row.created_at,
         sessionId: 0,
         fromCancel: false,
