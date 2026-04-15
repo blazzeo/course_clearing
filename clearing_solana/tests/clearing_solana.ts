@@ -53,6 +53,20 @@ describe("clearing_solana", () => {
       program.programId
     )[0];
 
+  const parseStatus = (status: any): string => Object.keys(status ?? {})[0] ?? "unknown";
+
+  const commitEmptyPlan = async (sess: PublicKey) => {
+    const root = Buffer.alloc(32, 1);
+    await (program as any).methods
+      .commitSessionPlan(Array.from(root), 0, 0)
+      .accounts({
+        state: statePda,
+        session: sess,
+        authority: admin.publicKey,
+      })
+      .rpc();
+  };
+
   const nameHash = (name: string): number[] =>
     Array.from(createHash("sha256").update(name.trim().toLowerCase()).digest());
 
@@ -264,6 +278,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(3))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     for (const [from, to, ts] of [[a.publicKey, b.publicKey, t1], [b.publicKey, c.publicKey, t2], [c.publicKey, a.publicKey, t3]] as [PublicKey, PublicKey, number][]) {
       await (program as any).methods
@@ -330,6 +345,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(3))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     await (program as any).methods
       .applyInternalNetting(a.publicKey, b.publicKey, new BN(t1), new BN(4_000_000_000))
@@ -418,6 +434,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(1))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     await expectAnchorError(
       () =>
@@ -464,6 +481,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(1))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     const posPda = positionPda(sess, a.publicKey, b.publicKey);
     await (program as any).methods
@@ -541,6 +559,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(1))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     await expectAnchorError(
       () =>
@@ -556,6 +575,41 @@ describe("clearing_solana", () => {
           .rpc(),
       "InvalidAllocationAmount"
     );
+  });
+
+  it("marks obligation as partially_netted after partial internal netting", async () => {
+    const a = Keypair.generate();
+    const b = Keypair.generate();
+    await airdrop(a.publicKey, 20);
+    await airdrop(b.publicKey, 20);
+    await registerParticipant(a, `a${Date.now()}p1`);
+    await registerParticipant(b, `b${Date.now()}p2`);
+
+    const t1 = Math.floor(Date.now() / 1000) + 600;
+    await registerAndConfirmObligation(a, b, 3_000_000_000, t1);
+
+    const stateBefore = await program.account.clearingState.fetch(statePda);
+    const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
+    const sess = sessionPda(nextSession);
+    await program.methods
+      .startClearingSession(new BN(1))
+      .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
+      .rpc();
+
+    await (program as any).methods
+      .applyInternalNetting(a.publicKey, b.publicKey, new BN(t1), new BN(1_000_000_000))
+      .accounts({
+        state: statePda,
+        session: sess,
+        obligation: obligationPda(a.publicKey, b.publicKey, t1),
+        pool: rootPoolPda,
+        authority: admin.publicKey,
+      })
+      .rpc();
+
+    const ob = await program.account.obligation.fetch(obligationPda(a.publicKey, b.publicKey, t1));
+    expect(Number(ob.amount.toString())).eq(2_000_000_000);
+    expect(parseStatus(ob.status as any)).eq("partiallyNetted");
   });
 
   it("rejects netting actions after session is finalized", async () => {
@@ -585,6 +639,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(1))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
     await program.methods
       .finalizeClearingSession()
       .accounts({ state: statePda, session: sess, authority: admin.publicKey })
@@ -642,6 +697,7 @@ describe("clearing_solana", () => {
       .startClearingSession(new BN(5))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
+    await commitEmptyPlan(sess);
 
     // Internal part from solver result
     await (program as any).methods

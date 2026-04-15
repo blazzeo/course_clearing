@@ -1,5 +1,6 @@
 use crate::ledger_engine::netting_clearing;
 use crate::models::RawSettlement;
+use crate::flow_solver::{solve_min_cost_flow, ExternalSettlement, InternalNetting};
 use anchor_lang::AccountDeserialize;
 use chrono::Utc;
 use clearing_solana::{ClearingState, Obligation, ObligationPool, ObligationStatus};
@@ -8,7 +9,10 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
@@ -23,7 +27,8 @@ pub enum WorkerCommand {
 
 #[derive(serde::Serialize, Clone)]
 pub struct AllocationResult {
-    pub obligation: String,
+    pub from: String,
+    pub to: String,
     pub amount: u64,
 }
 
@@ -31,6 +36,9 @@ pub struct AllocationResult {
 pub struct InternalNettingResult {
     pub obligation: String,
     pub amount: u64,
+    pub flow_used: u64,
+    pub edge_used_in_flow: bool,
+    pub edge_used_in_cycle: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -43,8 +51,18 @@ pub struct NettingSessionResult {
     pub input_obligations: Vec<InputObligationSnapshot>,
     pub data: Vec<AllocationResult>,
     pub internal_data: Vec<InternalNettingResult>,
+    pub external_count: u32,
+    pub internal_count: u32,
     pub merkle_root: String,
     pub merkle_leaves: Vec<MerkleLeafProof>,
+    pub allocator_mode: String,
+    pub fallback_reason: Option<String>,
+    pub flow_total_cost: Option<String>,
+    pub flow_objective: Option<String>,
+    pub flow_unmet_demand: Option<u64>,
+    pub flow_total: Option<u64>,
+    pub flow_total_positive_net: Option<u64>,
+    pub input_snapshot_hash: String,
     pub audit_log: Vec<AuditLogEntry>,
     pub timestamp: i64,
 }
@@ -62,6 +80,7 @@ pub struct InputObligationSnapshot {
 #[derive(serde::Serialize, Clone)]
 pub struct MerkleLeafProof {
     pub kind: String,
+    pub index: u32,
     pub obligation: String,
     pub amount: u64,
     pub leaf_hash: String,
@@ -73,6 +92,31 @@ pub struct AuditLogEntry {
     pub step: String,
     pub detail: String,
     pub timestamp: i64,
+}
+
+#[derive(Clone, Copy)]
+enum AllocatorMode {
+    Direct,
+    Transitive,
+    FullFallback,
+}
+
+impl AllocatorMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            AllocatorMode::Direct => "direct",
+            AllocatorMode::Transitive => "transitive",
+            AllocatorMode::FullFallback => "full_fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AllocationContext {
+    pda: Pubkey,
+    from: Pubkey,
+    to: Pubkey,
+    timestamp: i64,
 }
 
 pub struct WorkerState {
@@ -106,8 +150,18 @@ impl WorkerState {
                 input_obligations: vec![],
                 data: vec![],
                 internal_data: vec![],
+                external_count: 0,
+                internal_count: 0,
                 merkle_root: String::new(),
                 merkle_leaves: vec![],
+                allocator_mode: "init".to_string(),
+                fallback_reason: None,
+                flow_total_cost: None,
+                flow_objective: None,
+                flow_unmet_demand: None,
+                flow_total: None,
+                flow_total_positive_net: None,
+                input_snapshot_hash: String::new(),
                 audit_log: vec![],
                 timestamp: chrono::Utc::now().timestamp(),
             },
@@ -212,48 +266,232 @@ impl CronWorker {
         (participants, amounts)
     }
 
-    fn allocate_settlements(
+    fn obligation_contexts(obligations: &[(Pubkey, Obligation)]) -> Vec<AllocationContext> {
+        obligations
+            .iter()
+            .map(|(pda, o)| AllocationContext {
+                pda: *pda,
+                from: Pubkey::new_from_array(o.from.to_bytes()),
+                to: Pubkey::new_from_array(o.to.to_bytes()),
+                timestamp: o.timestamp,
+            })
+            .collect()
+    }
+
+    fn allocate_settlements_direct(
         settlements: Vec<RawSettlement>,
-        obligations: &Vec<(Pubkey, Obligation)>,
-    ) -> (Vec<(Pubkey, u64)>, bool) {
+        contexts: &[AllocationContext],
+        remaining_map: &mut HashMap<Pubkey, u64>,
+    ) -> (Vec<(Pubkey, u64)>, Vec<RawSettlement>) {
         let mut result = vec![];
-        let mut remaining_map: HashMap<Pubkey, u64> =
-            obligations.iter().map(|(pda, o)| (*pda, o.amount)).collect();
-        let mut has_unmatched_settlement = false;
+        let mut unmatched = vec![];
 
         for s in settlements {
             let mut remaining = s.amount;
-            let mut relevant: Vec<_> = obligations
+            let mut relevant: Vec<_> = contexts
                 .iter()
-                .filter(|(_, o)| {
-                    Pubkey::new_from_array(o.from.to_bytes()) == s.from_address
-                        && Pubkey::new_from_array(o.to.to_bytes()) == s.to_address
-                })
+                .filter(|ctx| ctx.from == s.from_address && ctx.to == s.to_address)
+                .copied()
                 .collect();
-            relevant.sort_by_key(|(_, o)| o.timestamp);
+            relevant.sort_by(|a, b| {
+                a.timestamp
+                    .cmp(&b.timestamp)
+                    .then_with(|| a.pda.to_bytes().cmp(&b.pda.to_bytes()))
+            });
 
-            for (pda, _) in relevant {
+            for ctx in relevant {
                 if remaining == 0 {
                     break;
                 }
-                let available = *remaining_map.get(pda).unwrap_or(&0);
+                let available = *remaining_map.get(&ctx.pda).unwrap_or(&0);
                 if available == 0 {
                     continue;
                 }
                 let used = std::cmp::min(available, remaining);
-                result.push((*pda, used));
-                remaining_map.insert(*pda, available - used);
+                result.push((ctx.pda, used));
+                remaining_map.insert(ctx.pda, available - used);
                 remaining -= used;
             }
             if remaining > 0 {
-                has_unmatched_settlement = true;
+                unmatched.push(RawSettlement {
+                    from_address: s.from_address,
+                    to_address: s.to_address,
+                    amount: remaining,
+                });
             }
         }
-        (result, has_unmatched_settlement)
+        (result, unmatched)
+    }
+
+    fn find_transitive_path(
+        from: Pubkey,
+        to: Pubkey,
+        contexts: &[AllocationContext],
+        remaining_map: &HashMap<Pubkey, u64>,
+    ) -> Option<Vec<Pubkey>> {
+        if from == to {
+            return Some(vec![]);
+        }
+        let mut queue = VecDeque::new();
+        let mut visited: HashSet<Pubkey> = HashSet::new();
+        let mut parent: HashMap<Pubkey, (Pubkey, Pubkey)> = HashMap::new();
+        queue.push_back(from);
+        visited.insert(from);
+
+        while let Some(node) = queue.pop_front() {
+            let mut outgoing: Vec<_> = contexts
+                .iter()
+                .filter(|ctx| ctx.from == node && *remaining_map.get(&ctx.pda).unwrap_or(&0) > 0)
+                .copied()
+                .collect();
+            outgoing.sort_by(|a, b| {
+                a.to.to_bytes()
+                    .cmp(&b.to.to_bytes())
+                    .then_with(|| a.timestamp.cmp(&b.timestamp))
+                    .then_with(|| a.pda.to_bytes().cmp(&b.pda.to_bytes()))
+            });
+
+            for edge in outgoing {
+                if visited.insert(edge.to) {
+                    parent.insert(edge.to, (node, edge.pda));
+                    if edge.to == to {
+                        let mut rev_edges: Vec<Pubkey> = Vec::new();
+                        let mut cur = to;
+                        while cur != from {
+                            let (prev, pda) = parent.get(&cur).copied()?;
+                            rev_edges.push(pda);
+                            cur = prev;
+                        }
+                        rev_edges.reverse();
+                        return Some(rev_edges);
+                    }
+                    queue.push_back(edge.to);
+                }
+            }
+        }
+        None
+    }
+
+    fn transitive_can_realize_unmatched(
+        unmatched: Vec<RawSettlement>,
+        contexts: &[AllocationContext],
+        remaining_map: &mut HashMap<Pubkey, u64>,
+    ) -> (bool, usize) {
+        let mut has_unmatched = false;
+        let mut paths_found = 0usize;
+
+        for s in unmatched {
+            let mut remaining = s.amount;
+            while remaining > 0 {
+                let Some(path) = Self::find_transitive_path(
+                    s.from_address,
+                    s.to_address,
+                    contexts,
+                    remaining_map,
+                ) else {
+                    has_unmatched = true;
+                    break;
+                };
+                if path.is_empty() {
+                    has_unmatched = true;
+                    break;
+                }
+                let bottleneck = path
+                    .iter()
+                    .map(|pda| *remaining_map.get(pda).unwrap_or(&0))
+                    .min()
+                    .unwrap_or(0);
+                if bottleneck == 0 {
+                    has_unmatched = true;
+                    break;
+                }
+                let used = std::cmp::min(remaining, bottleneck);
+                for pda in path {
+                    let avail = *remaining_map.get(&pda).unwrap_or(&0);
+                    if avail < used {
+                        has_unmatched = true;
+                        break;
+                    }
+                    remaining_map.insert(pda, avail - used);
+                }
+                paths_found += 1;
+                remaining -= used;
+            }
+        }
+        (!has_unmatched, paths_found)
+    }
+
+    fn allocate_settlements_v2(
+        settlements: Vec<RawSettlement>,
+        obligations: &Vec<(Pubkey, Obligation)>,
+        transitive_enabled: bool,
+        audit_log: &mut Vec<AuditLogEntry>,
+    ) -> (
+        Vec<(Pubkey, u64)>,
+        Vec<(Pubkey, u64)>,
+        AllocatorMode,
+        Option<String>,
+    ) {
+        let contexts = Self::obligation_contexts(obligations);
+        let mut remaining_map: HashMap<Pubkey, u64> = obligations
+            .iter()
+            .map(|(pda, o)| (*pda, o.amount))
+            .collect();
+
+        let (direct_allocs, unmatched) =
+            Self::allocate_settlements_direct(settlements, &contexts, &mut remaining_map);
+        if unmatched.is_empty() {
+            let internal = Self::compute_internal_nettings(&direct_allocs, obligations);
+            return (direct_allocs, internal, AllocatorMode::Direct, None);
+        }
+        if !transitive_enabled {
+            return (
+                Self::full_obligation_allocations(obligations),
+                vec![],
+                AllocatorMode::FullFallback,
+                Some("transitive allocator disabled".to_string()),
+            );
+        }
+
+        audit_log.push(AuditLogEntry {
+            step: "transitive_allocator_started".to_string(),
+            detail: format!("unmatched_edges={}", unmatched.len()),
+            timestamp: Utc::now().timestamp(),
+        });
+        let (all_unmatched_covered, paths_found) =
+            Self::transitive_can_realize_unmatched(unmatched, &contexts, &mut remaining_map);
+        audit_log.push(AuditLogEntry {
+            step: "transitive_paths_found".to_string(),
+            detail: format!(
+                "paths_found={} unmatched_covered={}",
+                paths_found, all_unmatched_covered
+            ),
+            timestamp: Utc::now().timestamp(),
+        });
+
+        if !all_unmatched_covered {
+            return (
+                Self::full_obligation_allocations(obligations),
+                vec![],
+                AllocatorMode::FullFallback,
+                Some(
+                    "transitive allocator could not realize all unmatched settlements".to_string(),
+                ),
+            );
+        }
+
+        // Ключевое правило: в transitive-режиме прямые матчи остаются external,
+        // а все транзитивно достижимые хвосты уходят в internal (apply_internal_netting),
+        // чтобы не плодить счета для оплаты.
+        let internal = Self::compute_internal_nettings(&direct_allocs, obligations);
+        (direct_allocs, internal, AllocatorMode::Transitive, None)
     }
 
     fn full_obligation_allocations(obligations: &Vec<(Pubkey, Obligation)>) -> Vec<(Pubkey, u64)> {
-        obligations.iter().map(|(pda, o)| (*pda, o.amount)).collect()
+        obligations
+            .iter()
+            .map(|(pda, o)| (*pda, o.amount))
+            .collect()
     }
 
     fn canonical_sort_allocations(items: &mut Vec<(Pubkey, u64)>) {
@@ -307,33 +545,91 @@ impl CronWorker {
             timestamp: Utc::now().timestamp(),
         }];
 
-        let (participants, amounts) = Self::parse_obligations(&all_obligations);
+        let mut input_edges: Vec<String> = all_obligations
+            .iter()
+            .map(|(_, o)| {
+                let from = Pubkey::new_from_array(o.from.to_bytes());
+                let to = Pubkey::new_from_array(o.to.to_bytes());
+                let status = match o.status {
+                    ObligationStatus::Created => "created",
+                    ObligationStatus::Confirmed => "confirmed",
+                    ObligationStatus::PartiallyNetted => "partially_netted",
+                    ObligationStatus::Declined => "declined",
+                    ObligationStatus::Netted => "netted",
+                    ObligationStatus::Cancelled => "cancelled",
+                };
+                format!("{}->{} amount={} status={}", from, to, o.amount, status)
+            })
+            .collect();
+        input_edges.sort();
+        audit_log.push(AuditLogEntry {
+            step: "input_obligations_snapshot".to_string(),
+            detail: format!("edges=[{}]", input_edges.join("; ")),
+            timestamp: Utc::now().timestamp(),
+        });
         tracing::info!(
             "Worker observed on-chain obligations for session {}: count={}",
             sid,
             all_obligations.len()
         );
-        let settlements = netting_clearing(&participants, &amounts)
-            .map_err(|e| anyhow::anyhow!("Netting error: {}", e))?;
-        let (candidate_allocations, has_unmatched_settlement) =
-            Self::allocate_settlements(settlements, &all_obligations);
-        let (mut allocations, mut internal_data) = if has_unmatched_settlement {
+        audit_log.push(AuditLogEntry {
+            step: "flow_graph_built".to_string(),
+            detail: format!("obligation_edges={}", all_obligations.len()),
+            timestamp: Utc::now().timestamp(),
+        });
+
+        let Some(sol) = solve_min_cost_flow(&all_obligations) else {
+            return Err(anyhow::anyhow!("mcmf could not produce a solution"));
+        };
+
+        audit_log.push(AuditLogEntry {
+            step: "mcmf_solved".to_string(),
+            detail: format!(
+                "objective={} total_cost={} total_flow={} positive_net={} unmet_demand={}",
+                sol.objective, sol.total_cost, sol.total_flow, sol.total_positive_net, sol.unmet_demand
+            ),
+            timestamp: Utc::now().timestamp(),
+        });
+        if sol.total_flow != sol.total_positive_net {
             audit_log.push(AuditLogEntry {
-                step: "fallback_applied".to_string(),
-                detail: "non-realizable settlement edges detected; switched to fully realizable per-obligation plan".to_string(),
+                step: "unmet_demand_detected".to_string(),
+                detail: format!(
+                    "total_flow={} total_positive_net={} unmet_demand={}",
+                    sol.total_flow, sol.total_positive_net, sol.unmet_demand
+                ),
                 timestamp: Utc::now().timestamp(),
             });
-            (Self::full_obligation_allocations(&all_obligations), vec![])
-        } else {
-            let internal = Self::compute_internal_nettings(&candidate_allocations, &all_obligations);
-            (candidate_allocations, internal)
-        };
-        Self::canonical_sort_allocations(&mut allocations);
-        Self::canonical_sort_allocations(&mut internal_data);
+        }
+
+        let mut allocations = sol.external_settlements;
+        allocations.sort_by(|a, b| {
+            a.from
+                .to_bytes()
+                .cmp(&b.from.to_bytes())
+                .then_with(|| a.to.to_bytes().cmp(&b.to.to_bytes()))
+                .then_with(|| a.amount.cmp(&b.amount))
+        });
+
+        let mut internal_data = sol.internal_nettings;
+        internal_data.sort_by(|a, b| {
+            a.obligation
+                .to_bytes()
+                .cmp(&b.obligation.to_bytes())
+                .then_with(|| a.amount.cmp(&b.amount))
+        });
+
+        let allocator_mode = AllocatorMode::Transitive;
+        let fallback_reason = None;
+        let flow_cost = Some(sol.total_cost.to_string());
+        let flow_objective = Some(sol.objective.to_string());
+        let unmet_demand = Some(sol.unmet_demand);
+        let flow_total = Some(sol.total_flow);
+        let flow_total_positive_net = Some(sol.total_positive_net);
         audit_log.push(AuditLogEntry {
             step: "solver_completed".to_string(),
             detail: format!(
-                "external_allocations={} internal_nettings={}",
+                "allocator_mode={} external_allocations={} internal_nettings={}",
+                allocator_mode.as_str(),
                 allocations.len(),
                 internal_data.len()
             ),
@@ -347,15 +643,24 @@ impl CronWorker {
         );
         let next_session_id = sid + 1;
         let input_obligations = Self::build_input_snapshot(&all_obligations);
-        let hash = Self::hash_allocations(next_session_id, &allocations, &internal_data);
+        let input_snapshot_hash = Self::hash_input_snapshot(&input_obligations);
+        let solver_version = env!("CARGO_PKG_VERSION").to_string();
+        let hash = Self::hash_allocations(
+            next_session_id,
+            &solver_version,
+            &input_snapshot_hash,
+            &allocations,
+            &internal_data,
+        );
         let (merkle_root, merkle_leaves) = Self::build_merkle_tree(&allocations, &internal_data);
+        let external_count = allocations.len() as u32;
+        let internal_count = internal_data
+            .iter()
+            .filter(|item| item.flow_used > 0)
+            .count() as u32;
         audit_log.push(AuditLogEntry {
             step: "merkle_built".to_string(),
-            detail: format!(
-                "merkle_root={} leaves={}",
-                merkle_root,
-                merkle_leaves.len()
-            ),
+            detail: format!("merkle_root={} leaves={}", merkle_root, merkle_leaves.len()),
             timestamp: Utc::now().timestamp(),
         });
         let timestamp = Utc::now().timestamp();
@@ -365,25 +670,39 @@ impl CronWorker {
             session_id: next_session_id,
             result_id: format!("session-{next_session_id}-{timestamp}"),
             hash,
-            solver_version: env!("CARGO_PKG_VERSION").to_string(),
+            solver_version: solver_version.clone(),
             build_sha: std::env::var("BUILD_SHA").unwrap_or_else(|_| "dev".to_string()),
             input_obligations,
             data: allocations
                 .into_iter()
-                .map(|(pda, amount)| AllocationResult {
-                    obligation: pda.to_string(),
-                    amount,
+                .map(|s| AllocationResult {
+                    from: s.from.to_string(),
+                    to: s.to.to_string(),
+                    amount: s.amount,
                 })
                 .collect(),
+            external_count,
             internal_data: internal_data
                 .into_iter()
-                .map(|(pda, amount)| InternalNettingResult {
-                    obligation: pda.to_string(),
-                    amount,
+                .map(|item| InternalNettingResult {
+                    obligation: item.obligation.to_string(),
+                    amount: item.amount,
+                    flow_used: item.flow_used,
+                    edge_used_in_flow: item.edge_used_in_flow,
+                    edge_used_in_cycle: item.edge_used_in_cycle,
                 })
                 .collect(),
+            internal_count,
             merkle_root,
             merkle_leaves,
+            allocator_mode: allocator_mode.as_str().to_string(),
+            fallback_reason,
+            flow_total_cost: flow_cost,
+            flow_objective,
+            flow_unmet_demand: unmet_demand,
+            flow_total,
+            flow_total_positive_net,
+            input_snapshot_hash,
             audit_log,
             timestamp,
         };
@@ -409,8 +728,8 @@ impl CronWorker {
         .bind(&session_result.result_id)
         .bind(&session_result.hash)
         .bind(&session_result.merkle_root)
-        .bind(i32::try_from(session_result.data.len()).unwrap_or(i32::MAX))
-        .bind(i32::try_from(session_result.internal_data.len()).unwrap_or(i32::MAX))
+        .bind(i32::try_from(session_result.external_count).unwrap_or(i32::MAX))
+        .bind(i32::try_from(session_result.internal_count).unwrap_or(i32::MAX))
         .bind(serde_json::to_value(&session_result)?)
         .bind(session_result.timestamp)
         .execute(&db_pool)
@@ -426,21 +745,42 @@ impl CronWorker {
         Ok(())
     }
 
+    fn hash_input_snapshot(input_obligations: &[InputObligationSnapshot]) -> String {
+        let mut hasher = Sha256::new();
+        for item in input_obligations {
+            hasher.update(item.obligation.as_bytes());
+            hasher.update(item.from.as_bytes());
+            hasher.update(item.to.as_bytes());
+            hasher.update(item.amount.to_le_bytes());
+            hasher.update(item.status.as_bytes());
+            hasher.update(item.timestamp.to_le_bytes());
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
     fn hash_allocations(
         session_id: u64,
-        allocations: &[(Pubkey, u64)],
-        internal_data: &[(Pubkey, u64)],
+        solver_version: &str,
+        input_snapshot_hash: &str,
+        allocations: &[ExternalSettlement],
+        internal_data: &[InternalNetting],
     ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(session_id.to_le_bytes());
-        for (pda, amount) in allocations {
-            hasher.update(pda.to_bytes());
-            hasher.update(amount.to_le_bytes());
+        hasher.update(solver_version.as_bytes());
+        hasher.update(input_snapshot_hash.as_bytes());
+        for item in allocations {
+            hasher.update(item.from.to_bytes());
+            hasher.update(item.to.to_bytes());
+            hasher.update(item.amount.to_le_bytes());
         }
         hasher.update([0xff]);
-        for (pda, amount) in internal_data {
-            hasher.update(pda.to_bytes());
-            hasher.update(amount.to_le_bytes());
+        for item in internal_data {
+            hasher.update(item.obligation.to_bytes());
+            hasher.update(item.amount.to_le_bytes());
+            hasher.update(item.flow_used.to_le_bytes());
+            hasher.update([u8::from(item.edge_used_in_flow)]);
+            hasher.update([u8::from(item.edge_used_in_cycle)]);
         }
         format!("{:x}", hasher.finalize())
     }
@@ -466,10 +806,10 @@ impl CronWorker {
             .collect()
     }
 
-    fn leaf_hash(kind: &str, pda: &Pubkey, amount: u64) -> [u8; 32] {
+    fn leaf_hash(kind: &str, key: &[u8], amount: u64) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(kind.as_bytes());
-        hasher.update(pda.to_bytes());
+        hasher.update(key);
         hasher.update(amount.to_le_bytes());
         hasher.finalize().into()
     }
@@ -486,24 +826,31 @@ impl CronWorker {
     }
 
     fn build_merkle_tree(
-        allocations: &[(Pubkey, u64)],
-        internal_data: &[(Pubkey, u64)],
+        allocations: &[ExternalSettlement],
+        internal_data: &[InternalNetting],
     ) -> (String, Vec<MerkleLeafProof>) {
-        let mut leaves_meta: Vec<(String, Pubkey, u64, [u8; 32])> = Vec::new();
-        for (pda, amount) in allocations {
+        let mut leaves_meta: Vec<(String, String, u64, [u8; 32])> = Vec::new();
+        for item in allocations {
+            let item_key = format!("{}->{}", item.from, item.to);
+            let mut key_bytes = Vec::with_capacity(64);
+            key_bytes.extend_from_slice(&item.from.to_bytes());
+            key_bytes.extend_from_slice(&item.to.to_bytes());
             leaves_meta.push((
                 "external".to_string(),
-                *pda,
-                *amount,
-                Self::leaf_hash("external", pda, *amount),
+                item_key,
+                item.amount,
+                Self::leaf_hash("external", &key_bytes, item.amount),
             ));
         }
-        for (pda, amount) in internal_data {
+        for item in internal_data {
+            if item.flow_used == 0 {
+                continue;
+            }
             leaves_meta.push((
                 "internal".to_string(),
-                *pda,
-                *amount,
-                Self::leaf_hash("internal", pda, *amount),
+                item.obligation.to_string(),
+                item.flow_used,
+                Self::leaf_hash("internal", &item.obligation.to_bytes(), item.flow_used),
             ));
         }
         if leaves_meta.is_empty() {
@@ -517,7 +864,11 @@ impl CronWorker {
             let mut i = 0usize;
             while i < prev.len() {
                 let left = prev[i];
-                let right = if i + 1 < prev.len() { prev[i + 1] } else { prev[i] };
+                let right = if i + 1 < prev.len() {
+                    prev[i + 1]
+                } else {
+                    prev[i]
+                };
                 next.push(Self::parent_hash(left, right));
                 i += 2;
             }
@@ -531,7 +882,7 @@ impl CronWorker {
             .unwrap_or_default();
 
         let mut proofs = Vec::new();
-        for (idx, (kind, obligation, amount, leaf)) in leaves_meta.iter().enumerate() {
+        for (idx, (kind, entry, amount, leaf)) in leaves_meta.iter().enumerate() {
             let mut proof = Vec::new();
             let mut index = idx;
             for level in &levels[..levels.len() - 1] {
@@ -549,7 +900,8 @@ impl CronWorker {
             }
             proofs.push(MerkleLeafProof {
                 kind: kind.clone(),
-                obligation: obligation.to_string(),
+                index: idx as u32,
+                obligation: entry.clone(),
                 amount: *amount,
                 leaf_hash: Self::to_hex(*leaf),
                 proof,
@@ -638,35 +990,80 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    #[test]
-    fn allocate_settlements_detects_unmatched_multilateral_edge() {
-        let u1 = Pubkey::from_str("11111111111111111111111111111111").unwrap();
-        let u2 = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
-        let u3 = Pubkey::from_str("Sysvar1111111111111111111111111111111111111").unwrap();
-
-        let settlements = vec![
-            RawSettlement { from_address: u1, to_address: u2, amount: 4 },
-            RawSettlement { from_address: u1, to_address: u3, amount: 3 },
-        ];
-
-        let mut obligations = Vec::new();
-        let mk_ob = |from: Pubkey, to: Pubkey, amount: u64| Obligation {
+    fn mk_ob(from: Pubkey, to: Pubkey, amount: u64, timestamp: i64) -> Obligation {
+        Obligation {
             status: ObligationStatus::Confirmed,
             from: anchor_lang::prelude::Pubkey::new_from_array(from.to_bytes()),
             to: anchor_lang::prelude::Pubkey::new_from_array(to.to_bytes()),
             amount,
-            timestamp: 0,
+            timestamp,
             session_id: None,
             from_cancel: false,
             to_cancel: false,
             pool_id: 0,
             bump: 0,
-        };
-        obligations.push((Pubkey::new_unique(), mk_ob(u1, u2, 6)));
-        obligations.push((Pubkey::new_unique(), mk_ob(u1, u3, 1)));
-        obligations.push((Pubkey::new_unique(), mk_ob(u2, u3, 2)));
+        }
+    }
 
-        let (_alloc, has_unmatched) = CronWorker::allocate_settlements(settlements, &obligations);
-        assert!(has_unmatched);
+    #[test]
+    fn allocate_v2_falls_back_when_transitive_disabled() {
+        let u1 = Pubkey::from_str("11111111111111111111111111111111").expect("pk");
+        let u2 = Pubkey::from_str("So11111111111111111111111111111111111111112").expect("pk");
+        let u3 = Pubkey::from_str("Sysvar1111111111111111111111111111111111111").expect("pk");
+
+        let settlements = vec![RawSettlement {
+            from_address: u1,
+            to_address: u2,
+            amount: 5,
+        }];
+
+        let mut obligations = Vec::new();
+        obligations.push((Pubkey::new_unique(), mk_ob(u1, u3, 5, 1)));
+        obligations.push((Pubkey::new_unique(), mk_ob(u3, u2, 5, 2)));
+
+        let mut audit = vec![];
+        let (alloc, internal, mode, reason) =
+            CronWorker::allocate_settlements_v2(settlements, &obligations, false, &mut audit);
+        assert!(matches!(mode, AllocatorMode::FullFallback));
+        assert_eq!(internal.len(), 0);
+        assert_eq!(alloc.len(), 2);
+        assert!(reason.is_some());
+    }
+
+    #[test]
+    fn allocate_v2_uses_transitive_paths_deterministically() {
+        let u1 = Pubkey::from_str("11111111111111111111111111111111").expect("pk");
+        let u2 = Pubkey::from_str("So11111111111111111111111111111111111111112").expect("pk");
+        let u3 = Pubkey::from_str("Sysvar1111111111111111111111111111111111111").expect("pk");
+
+        let settlements = vec![RawSettlement {
+            from_address: u1,
+            to_address: u2,
+            amount: 5,
+        }];
+
+        let p1 = Pubkey::new_unique();
+        let p2 = Pubkey::new_unique();
+        let obligations = vec![(p1, mk_ob(u1, u3, 5, 1)), (p2, mk_ob(u3, u2, 5, 2))];
+
+        let mut audit1 = vec![];
+        let (alloc1, internal1, mode1, reason1) = CronWorker::allocate_settlements_v2(
+            settlements.clone(),
+            &obligations,
+            true,
+            &mut audit1,
+        );
+        let mut audit2 = vec![];
+        let (alloc2, internal2, mode2, reason2) =
+            CronWorker::allocate_settlements_v2(settlements, &obligations, true, &mut audit2);
+
+        assert!(matches!(mode1, AllocatorMode::Transitive));
+        assert!(matches!(mode2, AllocatorMode::Transitive));
+        assert_eq!(reason1, None);
+        assert_eq!(reason2, None);
+        assert_eq!(alloc1, alloc2);
+        assert_eq!(internal1, internal2);
+        assert!(alloc1.is_empty());
+        assert_eq!(internal1, vec![(p1, 5), (p2, 5)]);
     }
 }

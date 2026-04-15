@@ -1,32 +1,43 @@
 import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
-import { getBillsByParticipant, payFee, settle_position, useProgram } from '../api'
+import { payFee, settle_position, useProgram } from '../api'
 import { Bill } from '../interfaces'
+import { useBills } from '../providers/BillsProvider'
 
 export default function Bills() {
 	const { publicKey } = useWallet()
 	const program = useProgram()
-	const [settlements, setSettlements] = useState<Bill[]>([])
+	const { bills: settlements, fetchBills, isLoading } = useBills()
 	const [processingBill, setProcessingBill] = useState<string | null>(null)
+	const formatSol = (lamports: number) => `${(lamports / 1e9).toFixed(4)} SOL`
 
 	useEffect(() => {
-		load()
-	}, [publicKey])
+		if (!publicKey || !program) return
+		fetchBills()
+	}, [publicKey, program, fetchBills])
 
 	const load = async () => {
 		if (!publicKey || !program)
 			return
 
-		const bills = await getBillsByParticipant(program, publicKey)
-
-		console.log(bills)
-
-		setSettlements(bills)
+		await fetchBills()
 	}
 
 	const payCommission = async (s: Bill) => {
 		if (!publicKey || !program) return toast.error("Connect wallet")
+
+		console.log("[Bills] Оплатить комиссию", {
+			action: "payFee",
+			pda: s.pda.toBase58(),
+			session_id: s.session_id,
+			debitor: s.debitor.toBase58(),
+			creditor: s.creditor.toBase58(),
+			net_amount_lamports: s.net_amount,
+			fee_amount_lamports: s.fee_amount,
+			status: s.status,
+			wallet: publicKey.toBase58(),
+		})
 
 		try {
 			setProcessingBill(s.pda.toBase58())
@@ -43,6 +54,18 @@ export default function Bills() {
 
 	const pay = async (s: Bill) => {
 		if (!publicKey || !program) return toast.error("Connect wallet")
+
+		console.log("[Bills] Оплатить позицию", {
+			action: "settlePosition",
+			pda: s.pda.toBase58(),
+			session_id: s.session_id,
+			debitor: s.debitor.toBase58(),
+			creditor: s.creditor.toBase58(),
+			net_amount_lamports: s.net_amount,
+			fee_amount_lamports: s.fee_amount,
+			status: s.status,
+			wallet: publicKey.toBase58(),
+		})
 
 		try {
 			setProcessingBill(s.pda.toBase58())
@@ -65,7 +88,11 @@ export default function Bills() {
 		<div className="card">
 			<h1>Мои счета</h1>
 
-			{settlements.length === 0 ? (
+			{isLoading ? (
+				<p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
+					Загрузка...
+				</p>
+			) : settlements.length === 0 ? (
 				<p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
 					Счета не найдены
 				</p>
@@ -85,7 +112,7 @@ export default function Bills() {
 							<tr key={s.pda.toBase58()}>
 								<td>{s.debitor.toBase58().slice(0, 8)}...</td>
 								<td>{s.creditor.toBase58().slice(0, 8)}...</td>
-								<td>{s.net_amount / 1e9} SOL</td>
+								<td>{formatSol(s.net_amount)}</td>
 								<td>{s.status === 2 ? "Оплачено" : "Не оплачено"}</td>
 								<td>
 									{s.debitor.equals(publicKey) && s.status === 0 && s.fee_amount > 0 && (
@@ -94,7 +121,7 @@ export default function Bills() {
 											onClick={() => payCommission(s)}
 											disabled={processingBill === s.pda.toBase58()}
 										>
-											Оплатить комиссию
+											Оплатить комиссию ({formatSol(s.fee_amount)})
 										</button>
 									)}
 									{s.debitor.equals(publicKey) && (s.status === 1 || (s.status === 0 && s.fee_amount === 0)) && (

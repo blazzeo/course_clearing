@@ -2,7 +2,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
-import { getPool, getPoolPda, registerObligation, useProgram } from '../api'
+import { getParticipantByUserName, getPool, getPoolPda, registerObligation, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
 
 export default function CreateObligation() {
@@ -10,8 +10,36 @@ export default function CreateObligation() {
     const program = useProgram()
     const navigate = useNavigate()
     const [counterparty, setCounterparty] = useState('')
+    const [counterpartyName, setCounterpartyName] = useState('')
     const [amount, setAmount] = useState('')
     const [loading, setLoading] = useState(false)
+    const [lookupLoading, setLookupLoading] = useState(false)
+
+    const handleLookupByName = async () => {
+        if (!program) {
+            toast.error('Программа не инициализирована')
+            return
+        }
+        if (!counterpartyName.trim()) {
+            toast.error('Введите user_name')
+            return
+        }
+        try {
+            setLookupLoading(true)
+            const participant = await getParticipantByUserName(program, counterpartyName)
+            if (!participant) {
+                toast.error('Контрагент с таким user_name не найден')
+                return
+            }
+            setCounterparty(participant.authority.toBase58())
+            toast.success(`Найден: ${participant.name}`)
+        } catch (error) {
+            console.error('Error searching participant by user_name:', error)
+            toast.error('Ошибка поиска по user_name')
+        } finally {
+            setLookupLoading(false)
+        }
+    }
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -102,6 +130,28 @@ export default function CreateObligation() {
                 )}
 
                 <form onSubmit={handleSubmit}>
+                    <label className="label">
+                        Поиск контрагента по user_name
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                        <input
+                            type="text"
+                            className="input"
+                            value={counterpartyName}
+                            onChange={(e) => setCounterpartyName(e.target.value)}
+                            placeholder="Например: ivanov"
+                            style={{ flex: 1 }}
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleLookupByName}
+                            disabled={lookupLoading || !program}
+                        >
+                            {lookupLoading ? 'Поиск...' : 'Найти'}
+                        </button>
+                    </div>
+
                     <label className="label">
                         Адрес контрагента (Pubkey)
                     </label>

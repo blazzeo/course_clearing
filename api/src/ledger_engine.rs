@@ -119,7 +119,11 @@ mod tests {
         Pubkey::from_str(s).expect("invalid pubkey")
     }
 
-    fn assert_conservation(participants: &[Pubkey], amounts: &[i64], settlements: &[RawSettlement]) {
+    fn assert_conservation(
+        participants: &[Pubkey],
+        amounts: &[i64],
+        settlements: &[RawSettlement],
+    ) {
         let mut delta: HashMap<Pubkey, i128> = HashMap::new();
         for (p, a) in participants.iter().zip(amounts.iter()) {
             delta.insert(*p, *a as i128);
@@ -128,7 +132,10 @@ mod tests {
             *delta.entry(s.from_address).or_insert(0) += s.amount as i128;
             *delta.entry(s.to_address).or_insert(0) -= s.amount as i128;
         }
-        assert!(delta.values().all(|v| *v == 0), "non-zero residuals: {delta:?}");
+        assert!(
+            delta.values().all(|v| *v == 0),
+            "non-zero residuals: {delta:?}"
+        );
     }
 
     #[test]
@@ -359,5 +366,20 @@ mod tests {
         assert_eq!(to_u2 + to_u3, 7);
         assert_eq!(to_u2, 4);
         assert_eq!(to_u3, 3);
+    }
+
+    #[test]
+    fn transitional_clearing() {
+        let user1 = pk("11111111111111111111111111111111");
+        let user2 = pk("So11111111111111111111111111111111111111112");
+        let user3 = pk("Sysvar1111111111111111111111111111111111111");
+
+        let participants = vec![user1, user2, user3];
+
+        let amounts = vec![-1, 3, -2];
+        let settlements = netting_clearing(&participants, &amounts).expect("netting failed");
+
+        assert_eq!(settlements.len(), 2);
+        assert_conservation(&participants, &amounts, &settlements);
     }
 }

@@ -1,5 +1,5 @@
 // providers/SimplePositionsProvider.tsx
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useRef, useState, ReactNode } from "react";
 import { Bill } from "../interfaces";
 import { getBillsByParticipant } from "../api";
 import { Program } from "@coral-xyz/anchor";
@@ -10,7 +10,7 @@ interface BillsContextType {
     bills: Bill[];
     isLoading: boolean;
     fetchBills: () => Promise<void>;
-    refreshBills: () => void;
+    refreshBills: () => Promise<void>;
 }
 
 // Создаем контекст
@@ -26,26 +26,44 @@ interface BillsProviderProps {
 export function BillsProvider({ children, program, publicKey }: BillsProviderProps) {
     const [bills, setBills] = useState<Bill[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const inFlightRef = useRef<Promise<void> | null>(null);
+    const lastFetchAtRef = useRef<number>(0);
+    const CACHE_TTL_MS = 5000;
 
     // Метод - получить данные
-    const fetchBills = async () => {
+    const fetchBills = useCallback(async () => {
         if (!program || !publicKey) return
-
-        setIsLoading(true);
-        try {
-            const data = await getBillsByParticipant(program, publicKey)
-            setBills(data);
-        } catch (error) {
-            console.error(error);
-        } finally {
-            setIsLoading(false);
+        const now = Date.now();
+        if (inFlightRef.current) {
+            await inFlightRef.current;
+            return;
         }
-    };
+        if (bills.length > 0 && now - lastFetchAtRef.current < CACHE_TTL_MS) {
+            return;
+        }
+
+        const task = (async () => {
+            setIsLoading(true);
+            try {
+                const data = await getBillsByParticipant(program, publicKey)
+                setBills(data);
+                lastFetchAtRef.current = Date.now();
+            } catch (error) {
+                console.error(error);
+            } finally {
+                setIsLoading(false);
+            }
+        })();
+        inFlightRef.current = task;
+        try {
+            await task;
+        } finally {
+            inFlightRef.current = null;
+        }
+    }, [program, publicKey, bills.length]);
 
     // Метод - обновить данные
-    const refreshBills = async () => {
-        await fetchBills()
-    };
+    const refreshBills = fetchBills;
 
     return (
         <BillsContext.Provider value={{

@@ -22,6 +22,30 @@ type DbObligationApiItem = {
     closed_at: number | null;
 };
 
+export type MerkleLeafPayload = {
+    index: number;
+    amount: number;
+    leaf_hash: string;
+    proof: string[];
+};
+
+export type InternalMerkleLeafPayload = MerkleLeafPayload & {
+    obligation: string;
+};
+
+export type ExternalMerkleLeafPayload = MerkleLeafPayload & {
+    from: string;
+    to: string;
+};
+
+function decodeHex32(hex: string): number[] {
+    const normalized = hex.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+        throw new Error(`Invalid 32-byte hex: ${hex}`);
+    }
+    return Array.from(Buffer.from(normalized, "hex"));
+}
+
 export function getProgram(provider: AnchorProvider): Program<ClearingSolana> {
     return new Program<ClearingSolana>(
         idl as ClearingSolana,
@@ -270,6 +294,41 @@ export async function buildFinalizeClearingSessionTx(
 
     return await program.methods
         .finalizeClearingSession()
+        .accounts({
+            state,
+            session,
+            authority,
+        })
+        .transaction();
+}
+
+export async function buildCommitSessionPlanTx(
+    program: Program<ClearingSolana>,
+    merkleRootHex: string,
+    expectedExternalCount: number,
+    expectedInternalCount: number,
+    sessionId?: number
+): Promise<Transaction> {
+    const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
+    const merkleRoot = decodeHex32(merkleRootHex);
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const effectiveSessionId =
+        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    return await (program as any).methods
+        .commitSessionPlan(
+            merkleRoot,
+            expectedExternalCount,
+            expectedInternalCount
+        )
         .accounts({
             state,
             session,
@@ -527,6 +586,112 @@ export async function buildCreatePositionByObligationTx(
         .transaction();
 }
 
+export async function buildApplyInternalNettingWithProofTx(
+    program: Program<ClearingSolana>,
+    item: InternalMerkleLeafPayload,
+    sessionId?: number
+): Promise<Transaction> {
+    const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
+
+    const obligationPda = new PublicKey(item.obligation);
+    const obligation = await program.account.obligation.fetch(obligationPda);
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const effectiveSessionId =
+        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    const [pool] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
+        program.programId
+    );
+    const leafHash = decodeHex32(item.leaf_hash);
+    const proof = item.proof.map((p) => decodeHex32(p));
+    const [appliedLeaf] = PublicKey.findProgramAddressSync(
+        [Buffer.from("applied_leaf"), session.toBuffer(), Buffer.from(leafHash)],
+        program.programId
+    );
+
+    return await (program as any).methods
+        .applyInternalNettingWithProof(
+            obligation.from,
+            obligation.to,
+            obligation.timestamp,
+            new BN(item.amount),
+            leafHash,
+            proof,
+            item.index
+        )
+        .accounts({
+            state,
+            session,
+            obligation: obligationPda,
+            pool,
+            appliedLeaf,
+            authority,
+            systemProgram: SystemProgram.programId,
+        })
+        .transaction();
+}
+
+export async function buildApplyExternalSettlementWithProofTx(
+    program: Program<ClearingSolana>,
+    item: ExternalMerkleLeafPayload,
+    sessionId?: number
+): Promise<Transaction> {
+    const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
+
+    const from = new PublicKey(item.from);
+    const to = new PublicKey(item.to);
+    const [state] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const stateAccount = await program.account.clearingState.fetch(state);
+    const effectiveSessionId =
+        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
+    const [session] = PublicKey.findProgramAddressSync(
+        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
+        program.programId
+    );
+    const [pairPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("position"), session.toBuffer(), from.toBuffer(), to.toBuffer()],
+        program.programId
+    );
+    const leafHash = decodeHex32(item.leaf_hash);
+    const proof = item.proof.map((p) => decodeHex32(p));
+    const [appliedLeaf] = PublicKey.findProgramAddressSync(
+        [Buffer.from("applied_leaf"), session.toBuffer(), Buffer.from(leafHash)],
+        program.programId
+    );
+
+    return await (program as any).methods
+        .applyExternalSettlementWithProof(
+            from,
+            to,
+            new BN(item.amount),
+            leafHash,
+            proof,
+            item.index
+        )
+        .accounts({
+            state,
+            session,
+            pairPosition,
+            appliedLeaf,
+            authority,
+            systemProgram: SystemProgram.programId,
+        })
+        .transaction();
+}
+
 export async function registerParticipant(program: Program<ClearingSolana>, name: string) {
     const authority = program.provider.publicKey!;
 
@@ -569,6 +734,43 @@ export async function registerParticipant(program: Program<ClearingSolana>, name
             systemProgram: SystemProgram.programId
         })
         .rpc();
+}
+
+export async function getParticipantByUserName(
+    program: Program<ClearingSolana>,
+    rawName: string
+): Promise<Participant | null> {
+    const name = rawName.trim().toLowerCase();
+    if (!name) return null;
+
+    const encoder = new TextEncoder();
+    const hashBytes = new Uint8Array(sha256.array(name));
+    const [nameRegistry] = PublicKey.findProgramAddressSync(
+        [encoder.encode("name_registry"), hashBytes],
+        program.programId
+    );
+
+    const registry = await (program as any).account.nameRegistry.fetchNullable(nameRegistry);
+    if (!registry) {
+        return null;
+    }
+    const participantAuthority = registry.participant as PublicKey;
+    const participantPda = getParticipantPda(program.programId, participantAuthority);
+    const account = await (program as any).account.participant.fetchNullable(participantPda);
+    if (!account) {
+        return null;
+    }
+    return {
+        pda: participantPda,
+        authority: account.authority as PublicKey,
+        userType: parseUserType(account.userType as AnchorEnum),
+        registrationTimestamp: safeBN(account.registrationTimestamp as BNLike),
+        updateTimestamp: safeBN(account.updateTimestamp as BNLike),
+        totalObligations: account.totalObligations as number,
+        lastSessionId: safeBN(account.lastSessionId as BNLike),
+        name: account.name as string,
+        bump: account.bump as number,
+    };
 }
 
 export async function settle_position(
@@ -1114,8 +1316,22 @@ export async function getBillsByParticipant(
     program: Program<ClearingSolana>,
     pubkey: PublicKey
 ): Promise<Bill[]> {
-    const all = await program.account.netPosition.all();
-    return all
+    const pubkeyBase58 = pubkey.toBase58();
+    const DEBITOR_OFFSET = 49; // 8 discriminator + 1 status + 8 session_id + 32 creditor
+    const NET_POSITION_ACCOUNT_SIZE = 98; // 8 discriminator + NetPosition::LEN(90)
+    const byDebitor = await program.account.netPosition.all([
+        {
+            dataSize: NET_POSITION_ACCOUNT_SIZE,
+        },
+        {
+            memcmp: {
+                offset: DEBITOR_OFFSET,
+                bytes: pubkeyBase58,
+            },
+        },
+    ], "confirmed");
+
+    return byDebitor
         .map(({ account, publicKey }) => ({
             pda: publicKey,
             status: parseNetPositionStatus(account.status as AnchorEnum),

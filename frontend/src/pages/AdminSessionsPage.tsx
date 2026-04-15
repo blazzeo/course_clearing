@@ -3,8 +3,13 @@ import { toast } from "react-toastify";
 import { getClearingSessionPayload, listClearingSessions } from "../api";
 import { ClearingAuditResult, ClearingSessionSummary } from "../interfaces";
 import { API_URL } from "../main";
+import SessionVisualization from "../components/SessionVisualization";
 
-const shortKey = (value: string) => `${value.slice(0, 6)}...${value.slice(-6)}`;
+const shortKey = (value?: string | null) => {
+    if (!value) return "n/a";
+    if (value.length <= 14) return value;
+    return `${value.slice(0, 6)}...${value.slice(-6)}`;
+};
 const fmtSol = (lamports: number) => `${(lamports / 1e9).toFixed(4)} SOL`;
 const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString("ru-RU");
 function csvEscape(value: string | number | null | undefined): string {
@@ -19,6 +24,11 @@ function renderSessionDetails(audit: ClearingAuditResult) {
                 <div><b>Result hash:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
                 <div><b>Merkle root:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
                 <div><b>Solver:</b> {audit.solver_version || "n/a"} | <b>Build:</b> {audit.build_sha || "n/a"}</div>
+                <div><b>Allocator mode:</b> {audit.allocator_mode || "n/a"}</div>
+                {audit.fallback_reason ? <div><b>Fallback reason:</b> {audit.fallback_reason}</div> : null}
+                {audit.flow_objective ? <div><b>Flow objective:</b> {audit.flow_objective}</div> : null}
+                {audit.flow_total_cost != null ? <div><b>Flow total cost:</b> {audit.flow_total_cost}</div> : null}
+                {audit.flow_unmet_demand != null ? <div><b>Flow unmet demand:</b> {audit.flow_unmet_demand}</div> : null}
                 <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
             </div>
 
@@ -45,15 +55,49 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             <details>
                 <summary style={{ cursor: "pointer" }}>External allocations ({audit.data.length})</summary>
                 <ul>
-                    {audit.data.map((x) => <li key={`ex-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
+                    {audit.data.map((x) => (
+                        <li key={`ex-${x.from}-${x.to}-${x.amount}`}>
+                            {shortKey(x.from)} → {shortKey(x.to)}: {fmtSol(x.amount)}
+                        </li>
+                    ))}
                 </ul>
             </details>
 
             <details>
                 <summary style={{ cursor: "pointer" }}>Internal nettings ({audit.internal_data.length})</summary>
                 <ul>
-                    {audit.internal_data.map((x) => <li key={`in-${x.obligation}`}>{shortKey(x.obligation)}: {fmtSol(x.amount)}</li>)}
+                    {audit.internal_data.map((x) => {
+                        const applied = Number(x.flow_used ?? 0);
+                        const residual = Number(x.amount ?? 0);
+                        const text =
+                            applied > 0
+                                ? `списание ${fmtSol(applied)}, остаток в плане ${fmtSol(residual)}`
+                                : `без списания в сессии (остаток в плане ${fmtSol(residual)})`;
+                        return (
+                            <li key={`in-${x.obligation}`}>
+                                {shortKey(x.obligation)}: {text}
+                            </li>
+                        );
+                    })}
                 </ul>
+            </details>
+
+            <details>
+                <summary style={{ cursor: "pointer" }}>Audit timeline ({audit.audit_log.length})</summary>
+                <ul>
+                    {audit.audit_log.map((entry, idx) => (
+                        <li key={`${entry.step}-${idx}`}>
+                            <b>{entry.step}</b> [{fmtTs(entry.timestamp)}]: {entry.detail}
+                        </li>
+                    ))}
+                </ul>
+            </details>
+
+            <details>
+                <summary style={{ cursor: "pointer" }}>Визуальный граф и Merkle tree</summary>
+                <div style={{ marginTop: "8px" }}>
+                    <SessionVisualization audit={audit} />
+                </div>
             </details>
         </div>
     );
@@ -62,6 +106,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
 export default function AdminSessionsPage() {
     const [sessions, setSessions] = useState<ClearingSessionSummary[]>([]);
     const [expandedSessions, setExpandedSessions] = useState<Record<number, ClearingAuditResult>>({});
+    const [openedSessionIds, setOpenedSessionIds] = useState<Set<number>>(new Set());
     const [loading, setLoading] = useState(false);
     const [walletFilter, setWalletFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState<"all" | "has_external" | "has_internal" | "empty">("all");
@@ -98,6 +143,27 @@ export default function AdminSessionsPage() {
         const payload = await getClearingSessionPayload(API_URL, sessionId);
         setExpandedSessions((prev) => ({ ...prev, [sessionId]: payload }));
         return payload;
+    };
+
+    const toggleSession = async (sessionId: number) => {
+        const isOpen = openedSessionIds.has(sessionId);
+        if (isOpen) {
+            setOpenedSessionIds((prev) => {
+                const next = new Set(prev);
+                next.delete(sessionId);
+                return next;
+            });
+            return;
+        }
+
+        if (!expandedSessions[sessionId]) {
+            await openSession(sessionId);
+        }
+        setOpenedSessionIds((prev) => {
+            const next = new Set(prev);
+            next.add(sessionId);
+            return next;
+        });
     };
 
     useEffect(() => {
@@ -236,15 +302,16 @@ export default function AdminSessionsPage() {
                             <div
                                 style={{ cursor: "pointer", fontWeight: 600, color: "#334155" }}
                                 onClick={() => {
-                                    openSession(s.session_id);
+                                    toggleSession(s.session_id);
                                 }}
                             >
+                                {openedSessionIds.has(s.session_id) ? "▼" : "▶"}{" "}
                                 Session #{s.session_id} | result: {s.result_id} | ext: {s.external_count}, int: {s.internal_count}
                             </div>
                             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "4px" }}>
                                 created: {fmtTs(s.created_at)} | merkle: {shortKey(s.merkle_root || "n/a")}
                             </div>
-                            {expandedSessions[s.session_id] && renderSessionDetails(expandedSessions[s.session_id])}
+                            {openedSessionIds.has(s.session_id) && expandedSessions[s.session_id] && renderSessionDetails(expandedSessions[s.session_id])}
                         </div>
                     ))}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px" }}>

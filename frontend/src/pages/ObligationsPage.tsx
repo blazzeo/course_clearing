@@ -140,7 +140,7 @@ export default function ObligationsPage() {
             loadPositions()
         } catch (error: any) {
             console.error('Error declining obligation:', error)
-            const errorMessage = error.response?.data?.error || 'Ошибка при отмене позиции'
+            const errorMessage = error.response?.data?.error || 'Ошибка при отклонении позиции'
             toast.error(errorMessage)
         } finally {
             setActionLoading(null)
@@ -349,7 +349,7 @@ export default function ObligationsPage() {
                                                 {actionLoading === obligation ? 'Подтверждение...' : 'Подтвердить'}
                                             </button>
                                         )}
-                                        {obligation.status === ObligationStatus.Created && obligation.to.equals(publicKey) && (
+                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey) && (
                                             <button
                                                 className="btn btn-danger"
                                                 style={{ padding: '6px 12px', fontSize: '14px', marginLeft: '8px' }}

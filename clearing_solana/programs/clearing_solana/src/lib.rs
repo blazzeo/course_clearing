@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use sha2::{Digest, Sha256};
 
 declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
 
@@ -107,9 +108,9 @@ pub mod clearing_solana {
     #[allow(unused_variables)]
     pub fn decline_obligation(
         ctx: Context<DeclineObligation>,
-        from: Pubkey,
-        to: Pubkey,
-        timestamp: i64,
+        _from: Pubkey,
+        _to: Pubkey,
+        _timestamp: i64,
     ) -> Result<()> {
         let clock = Clock::get()?;
 
@@ -215,6 +216,13 @@ pub mod clearing_solana {
             .processed_count
             .checked_add(1)
             .ok_or(CustomErrors::MathOverflow)?;
+        emit!(FlowAllocationApplied {
+            obligation: obligation.key(),
+            amount,
+            session_id,
+            kind: AllocationKind::External,
+            timestamp: ts,
+        });
 
         Ok(())
     }
@@ -269,6 +277,17 @@ pub mod clearing_solana {
                 timestamp: ts,
             });
         }
+        session.processed_count = session
+            .processed_count
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
+        emit!(FlowAllocationApplied {
+            obligation: obligation.key(),
+            amount,
+            session_id,
+            kind: AllocationKind::Internal,
+            timestamp: ts,
+        });
         Ok(())
     }
 
@@ -280,6 +299,15 @@ pub mod clearing_solana {
         require!(
             session.status == ClearingSessionStatus::Open,
             ClearingError::InvalidSessionStatus
+        );
+        require!(session.plan_committed, ClearingError::PlanNotCommitted);
+        require!(
+            session.applied_internal_count == session.expected_internal_count,
+            ClearingError::SessionPlanNotApplied
+        );
+        require!(
+            session.applied_external_count == session.expected_external_count,
+            ClearingError::SessionPlanNotApplied
         );
 
         session.status = ClearingSessionStatus::Closed;
@@ -314,8 +342,192 @@ pub mod clearing_solana {
         session.closed_at = 0;
         session.processed_count = 0;
         session.total_obligations = total_obligations;
+        session.plan_committed = false;
+        session.merkle_root = [0u8; 32];
+        session.expected_internal_count = 0;
+        session.expected_external_count = 0;
+        session.applied_internal_count = 0;
+        session.applied_external_count = 0;
         session.bump = ctx.bumps.session;
 
+        Ok(())
+    }
+
+    pub fn commit_session_plan(
+        ctx: Context<CommitSessionPlan>,
+        merkle_root: [u8; 32],
+        expected_external_count: u32,
+        expected_internal_count: u32,
+    ) -> Result<()> {
+        let session = &mut ctx.accounts.session;
+        require!(
+            session.status == ClearingSessionStatus::Open,
+            ClearingError::InvalidSessionStatus
+        );
+        require!(!session.plan_committed, ClearingError::PlanAlreadyCommitted);
+        require!(merkle_root != [0u8; 32], ClearingError::InvalidMerkleRoot);
+        session.merkle_root = merkle_root;
+        session.plan_committed = true;
+        session.expected_external_count = expected_external_count;
+        session.expected_internal_count = expected_internal_count;
+        session.applied_external_count = 0;
+        session.applied_internal_count = 0;
+        Ok(())
+    }
+
+    pub fn apply_internal_netting_with_proof(
+        ctx: Context<ApplyInternalNettingWithProof>,
+        _from: Pubkey,
+        _to: Pubkey,
+        _timestamp: i64,
+        amount: u64,
+        leaf_hash: [u8; 32],
+        proof: Vec<[u8; 32]>,
+        leaf_index: u32,
+    ) -> Result<()> {
+        let session = &mut ctx.accounts.session;
+        let session_id = session.id;
+        let obligation = &mut ctx.accounts.obligation;
+        require!(
+            session.status == ClearingSessionStatus::Open,
+            ClearingError::InvalidSessionStatus
+        );
+        require!(session.plan_committed, ClearingError::PlanNotCommitted);
+        require!(
+            session.applied_internal_count < session.expected_internal_count,
+            ClearingError::SessionPlanAlreadyApplied
+        );
+        let expected_leaf = hash_internal_leaf(obligation.key(), amount);
+        require!(expected_leaf == leaf_hash, ClearingError::InvalidLeafHash);
+        require!(
+            verify_merkle_proof(leaf_hash, &proof, leaf_index, session.merkle_root),
+            ClearingError::InvalidMerkleProof
+        );
+        let applied_leaf = &mut ctx.accounts.applied_leaf;
+        applied_leaf.session = session.key();
+        applied_leaf.leaf_hash = leaf_hash;
+        applied_leaf.bump = ctx.bumps.applied_leaf;
+
+        require!(amount > 0, ClearingError::InvalidAllocationAmount);
+        require!(
+            obligation.status == ObligationStatus::Created
+                || obligation.status == ObligationStatus::Confirmed
+                || obligation.status == ObligationStatus::PartiallyNetted,
+            ClearingError::InvalidObligationStatus
+        );
+        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        if let Some(existing_session) = obligation.session_id {
+            require!(existing_session == session_id, ClearingError::SessionMismatch);
+        } else {
+            obligation.session_id = Some(session_id);
+        }
+
+        obligation.amount = obligation
+            .amount
+            .checked_sub(amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+        let ts = Clock::get()?.unix_timestamp;
+        if obligation.amount == 0 {
+            obligation.status = ObligationStatus::Netted;
+            let pool = &mut ctx.accounts.pool;
+            pool.remove_obligation(obligation.key())?;
+            emit!(ObligationNetted {
+                obligation: obligation.key(),
+                timestamp: ts,
+            });
+        } else {
+            obligation.status = ObligationStatus::PartiallyNetted;
+            emit!(ObligationPartiallyNetted {
+                obligation: obligation.key(),
+                remaining_amount: obligation.amount,
+                timestamp: ts,
+            });
+        }
+        session.processed_count = session
+            .processed_count
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
+        session.applied_internal_count = session
+            .applied_internal_count
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
+        emit!(FlowAllocationApplied {
+            obligation: obligation.key(),
+            amount,
+            session_id,
+            kind: AllocationKind::Internal,
+            timestamp: ts,
+        });
+        Ok(())
+    }
+
+    pub fn apply_external_settlement_with_proof(
+        ctx: Context<ApplyExternalSettlementWithProof>,
+        from: Pubkey,
+        to: Pubkey,
+        amount: u64,
+        leaf_hash: [u8; 32],
+        proof: Vec<[u8; 32]>,
+        leaf_index: u32,
+    ) -> Result<()> {
+        let session = &mut ctx.accounts.session;
+        let state = &ctx.accounts.state;
+        require!(
+            session.status == ClearingSessionStatus::Open,
+            ClearingError::InvalidSessionStatus
+        );
+        require!(session.plan_committed, ClearingError::PlanNotCommitted);
+        require!(
+            session.applied_external_count < session.expected_external_count,
+            ClearingError::SessionPlanAlreadyApplied
+        );
+        require!(from != to, ClearingError::InvalidSettlementParticipants);
+        require!(amount > 0, ClearingError::InvalidAllocationAmount);
+
+        let expected_leaf = hash_external_leaf(from, to, amount);
+        require!(expected_leaf == leaf_hash, ClearingError::InvalidLeafHash);
+        require!(
+            verify_merkle_proof(leaf_hash, &proof, leaf_index, session.merkle_root),
+            ClearingError::InvalidMerkleProof
+        );
+        let applied_leaf = &mut ctx.accounts.applied_leaf;
+        applied_leaf.session = session.key();
+        applied_leaf.leaf_hash = leaf_hash;
+        applied_leaf.bump = ctx.bumps.applied_leaf;
+
+        let pair_position = &mut ctx.accounts.pair_position;
+        pair_position.net_amount = pair_position
+            .net_amount
+            .checked_add(amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+        if pair_position.status == NetPositionStatus::None {
+            pair_position.session_id = session.id;
+            pair_position.debitor = from;
+            pair_position.creditor = to;
+            pair_position.bump = ctx.bumps.pair_position;
+        }
+        let add_fee_amount = state.calculate_fee(amount)?;
+        pair_position.fee_amount = pair_position
+            .fee_amount
+            .checked_add(add_fee_amount)
+            .ok_or(CustomErrors::MathOverflow)?;
+
+        session.processed_count = session
+            .processed_count
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
+        session.applied_external_count = session
+            .applied_external_count
+            .checked_add(1)
+            .ok_or(CustomErrors::MathOverflow)?;
+
+        emit!(ExternalSettlementApplied {
+            from,
+            to,
+            amount,
+            session_id: session.id,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
         Ok(())
     }
 
@@ -883,6 +1095,12 @@ pub struct ClearingSession {
     pub closed_at: i64,
     pub total_obligations: u32,
     pub processed_count: u32,
+    pub merkle_root: [u8; 32],
+    pub plan_committed: bool,
+    pub expected_internal_count: u32,
+    pub expected_external_count: u32,
+    pub applied_internal_count: u32,
+    pub applied_external_count: u32,
     pub bump: u8,
 }
 
@@ -893,6 +1111,12 @@ impl ClearingSession {
         8 +  // closed_at
         4 +  // total_obligations
         4 +  // processed_count
+        32 + // merkle_root
+        1 +  // plan_committed
+        4 +  // expected_internal_count
+        4 +  // expected_external_count
+        4 +  // applied_internal_count
+        4 +  // applied_external_count
         1; // bump
 
     pub fn pda(session_id: u64) -> (Pubkey, u8) {
@@ -969,6 +1193,17 @@ pub struct NetPosition {
     pub net_amount: u64,
     pub fee_amount: u64,
     pub bump: u8,
+}
+
+#[account]
+pub struct AppliedLeaf {
+    pub session: Pubkey,
+    pub leaf_hash: [u8; 32],
+    pub bump: u8,
+}
+
+impl AppliedLeaf {
+    pub const LEN: usize = 32 + 32 + 1;
 }
 
 impl NetPosition {
@@ -1536,7 +1771,8 @@ pub struct CreatePosition<'info> {
     #[account(
         mut,
         seeds = [b"state"],
-        bump
+        bump,
+        constraint = state.super_admin == Some(payer.key()) @ CustomErrors::Unauthorized
     )]
     pub state: Box<Account<'info, ClearingState>>,
 
@@ -1582,7 +1818,8 @@ pub struct ApplyInternalNetting<'info> {
     #[account(
         mut,
         seeds = [b"state"],
-        bump
+        bump,
+        constraint = state.super_admin == Some(authority.key()) @ CustomErrors::Unauthorized
     )]
     pub state: Box<Account<'info, ClearingState>>,
 
@@ -1611,6 +1848,112 @@ pub struct ApplyInternalNetting<'info> {
     pub authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(merkle_root: [u8; 32], expected_external_count: u32, expected_internal_count: u32)]
+pub struct CommitSessionPlan<'info> {
+    #[account(
+        seeds = [b"state"],
+        bump,
+        constraint = state.super_admin == Some(authority.key()) @ CustomErrors::Unauthorized
+    )]
+    pub state: Account<'info, ClearingState>,
+
+    #[account(
+        mut,
+        seeds = [b"session", state.total_sessions.to_le_bytes().as_ref()],
+        bump = session.bump
+    )]
+    pub session: Account<'info, ClearingSession>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(from: Pubkey, to: Pubkey, timestamp: i64, amount: u64, leaf_hash: [u8; 32])]
+pub struct ApplyInternalNettingWithProof<'info> {
+    #[account(
+        seeds = [b"state"],
+        bump,
+        constraint = state.super_admin == Some(authority.key()) @ CustomErrors::Unauthorized
+    )]
+    pub state: Box<Account<'info, ClearingState>>,
+
+    #[account(
+        mut,
+        seeds = [b"session", &state.total_sessions.to_le_bytes()],
+        bump = session.bump
+    )]
+    pub session: Box<Account<'info, ClearingSession>>,
+
+    #[account(
+        mut,
+        seeds = [b"obligation", from.as_ref(), to.as_ref(), timestamp.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub obligation: Box<Account<'info, Obligation>>,
+
+    #[account(
+        mut,
+        seeds = [b"pool", obligation.pool_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub pool: Box<Account<'info, ObligationPool>>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + AppliedLeaf::LEN,
+        seeds = [b"applied_leaf", session.key().as_ref(), leaf_hash.as_ref()],
+        bump
+    )]
+    pub applied_leaf: Account<'info, AppliedLeaf>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(from: Pubkey, to: Pubkey, amount: u64, leaf_hash: [u8; 32])]
+pub struct ApplyExternalSettlementWithProof<'info> {
+    #[account(
+        seeds = [b"state"],
+        bump,
+        constraint = state.super_admin == Some(authority.key()) @ CustomErrors::Unauthorized
+    )]
+    pub state: Box<Account<'info, ClearingState>>,
+
+    #[account(
+        mut,
+        seeds = [b"session", &state.total_sessions.to_le_bytes()],
+        bump = session.bump
+    )]
+    pub session: Box<Account<'info, ClearingSession>>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + NetPosition::LEN,
+        seeds = [b"position", session.key().as_ref(), from.as_ref(), to.as_ref()],
+        bump
+    )]
+    pub pair_position: Box<Account<'info, NetPosition>>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + AppliedLeaf::LEN,
+        seeds = [b"applied_leaf", session.key().as_ref(), leaf_hash.as_ref()],
+        bump
+    )]
+    pub applied_leaf: Account<'info, AppliedLeaf>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[error_code]
 pub enum ClearingError {
     AlreadyProcessed,
@@ -1618,6 +1961,14 @@ pub enum ClearingError {
     InvalidObligationStatus,
     InvalidAllocationAmount,
     SessionMismatch,
+    PlanNotCommitted,
+    PlanAlreadyCommitted,
+    SessionPlanAlreadyApplied,
+    SessionPlanNotApplied,
+    InvalidMerkleRoot,
+    InvalidLeafHash,
+    InvalidMerkleProof,
+    InvalidSettlementParticipants,
 }
 
 #[derive(Accounts)]
@@ -1625,7 +1976,8 @@ pub struct FinalizeClearingSession<'info> {
     #[account(
         mut,
         seeds = [b"state"],
-        bump
+        bump,
+        constraint = state.super_admin == Some(authority.key()) @ CustomErrors::Unauthorized
     )]
     pub state: Account<'info, ClearingState>,
 
@@ -1990,6 +2342,21 @@ pub struct ObligationPartiallyNetted {
     pub timestamp: i64,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationKind {
+    External,
+    Internal,
+}
+
+#[event]
+pub struct FlowAllocationApplied {
+    pub obligation: Pubkey,
+    pub amount: u64,
+    pub session_id: u64,
+    pub kind: AllocationKind,
+    pub timestamp: i64,
+}
+
 #[event]
 pub struct ParticipantRegistered {
     pub participant: Pubkey,
@@ -2014,6 +2381,86 @@ pub struct PositionPartialySettled {
     pub settle_amount: u64,
     pub remaining_amount: u64,
     pub timestamp: i64,
+}
+
+#[event]
+pub struct ExternalSettlementApplied {
+    pub from: Pubkey,
+    pub to: Pubkey,
+    pub amount: u64,
+    pub session_id: u64,
+    pub timestamp: i64,
+}
+
+fn hash_internal_leaf(obligation: Pubkey, amount: u64) -> [u8; 32] {
+    sha256_bytes(&[b"internal", obligation.as_ref(), &amount.to_le_bytes()])
+}
+
+fn hash_external_leaf(from: Pubkey, to: Pubkey, amount: u64) -> [u8; 32] {
+    sha256_bytes(&[
+        b"external",
+        from.as_ref(),
+        to.as_ref(),
+        &amount.to_le_bytes(),
+    ])
+}
+
+fn verify_merkle_proof(
+    leaf_hash: [u8; 32],
+    proof: &[[u8; 32]],
+    leaf_index: u32,
+    merkle_root: [u8; 32],
+) -> bool {
+    let mut current = leaf_hash;
+    let mut index = leaf_index as usize;
+    for sibling in proof {
+        current = if index % 2 == 0 {
+            sha256_bytes(&[&current, sibling])
+        } else {
+            sha256_bytes(&[sibling, &current])
+        };
+        index /= 2;
+    }
+    current == merkle_root
+}
+
+fn sha256_bytes(parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parent(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+        sha256_bytes(&[&left, &right])
+    }
+
+    #[test]
+    fn verifies_valid_merkle_proof_for_internal_leaf() {
+        let obligation_a = Pubkey::new_unique();
+        let obligation_b = Pubkey::new_unique();
+        let leaf_a = hash_internal_leaf(obligation_a, 10);
+        let leaf_b = hash_internal_leaf(obligation_b, 20);
+        let root = parent(leaf_a, leaf_b);
+        let proof = vec![leaf_b];
+        assert!(verify_merkle_proof(leaf_a, &proof, 0, root));
+    }
+
+    #[test]
+    fn rejects_invalid_merkle_proof() {
+        let from = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+        let leaf = hash_external_leaf(from, to, 42);
+        let wrong_sibling = hash_external_leaf(Pubkey::new_unique(), Pubkey::new_unique(), 42);
+        let root = parent(leaf, hash_external_leaf(Pubkey::new_unique(), Pubkey::new_unique(), 99));
+        let proof = vec![wrong_sibling];
+        assert!(!verify_merkle_proof(leaf, &proof, 0, root));
+    }
 }
 
 #[error_code]

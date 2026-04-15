@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-import { applyInternalNetting, buildApplyInternalNettingTx, buildCreatePositionByObligationTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, createPositionByObligation, finalizeClearingSession, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, startClearingSession, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
+import { buildApplyExternalSettlementWithProofTx, buildApplyInternalNettingWithProofTx, buildCommitSessionPlanTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
 import { ClearingAuditResult, Participant, UserType, UserTypeToString } from '../interfaces'
 import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
@@ -61,10 +61,30 @@ export default function AdminPanel() {
                 status: string;
                 timestamp: number;
             }[];
-            data: { obligation: string; amount: number }[];
-            internal_data: { obligation: string; amount: number }[];
+            data: { from: string; to: string; amount: number }[];
+            internal_data: {
+                obligation: string;
+                amount: number;
+                flow_used?: number;
+                edge_used_in_flow?: boolean;
+                edge_used_in_cycle?: boolean;
+            }[];
             merkle_root?: string;
-            merkle_leaves?: { kind: string; obligation: string; amount: number; leaf_hash: string; proof: string[] }[];
+            external_count?: number;
+            internal_count?: number;
+            merkle_leaves?: {
+                kind: string;
+                index: number;
+                obligation: string;
+                amount: number;
+                leaf_hash: string;
+                proof: string[];
+            }[];
+            allocator_mode?: string;
+            fallback_reason?: string | null;
+            flow_total_cost?: number | null;
+            flow_objective?: string | null;
+            flow_unmet_demand?: number | null;
             audit_log?: { step: string; detail: string; timestamp: number }[];
             timestamp: number;
         };
@@ -83,6 +103,11 @@ export default function AdminPanel() {
         internal_data: r.internal_data ?? [],
         merkle_root: r.merkle_root ?? "",
         merkle_leaves: r.merkle_leaves ?? [],
+        allocator_mode: r.allocator_mode,
+        fallback_reason: r.fallback_reason,
+        flow_total_cost: r.flow_total_cost,
+        flow_objective: r.flow_objective,
+        flow_unmet_demand: r.flow_unmet_demand,
         audit_log: r.audit_log ?? [],
         timestamp: r.timestamp,
     });
@@ -180,21 +205,21 @@ export default function AdminPanel() {
 
     const executeOnChainAllocations = async (
         requestId: string,
-        allocations: { obligation: string; amount: number }[],
-        internalNettings: { obligation: string; amount: number }[]
+        result: NonNullable<ClearingApiResponse["data"]>
     ) => {
         if (!publicKey || !program) {
             throw new Error("Кошелек не найден")
         }
+        const { externalLeaves, internalLeaves, merkleRoot } = buildOnChainOperations(result);
         logClearing(requestId, "on-chain execution started", {
-            allocationsCount: allocations.length,
-            internalNettingsCount: internalNettings.length,
+            allocationsCount: externalLeaves.length,
+            internalNettingsCount: internalLeaves.length,
             wallet: publicKey.toBase58(),
             programId: program.programId.toBase58(),
             usesBatchSigning: Boolean(signAllTransactions),
         });
         // Preflight: validate current on-chain obligation snapshot before sending txs.
-        for (const item of [...allocations, ...internalNettings]) {
+        for (const item of internalLeaves) {
             const obligationPda = new PublicKey(item.obligation);
             const acc = await (program as any).account.obligation.fetch(obligationPda);
             const status = acc.status as Record<string, unknown>;
@@ -221,23 +246,30 @@ export default function AdminPanel() {
             const nextSessionId = state.total_sessions + 1;
             logClearing(requestId, "batch mode session prepared", { nextSessionId });
             const txs = [];
-            txs.push(await buildStartClearingSessionTx(program, allocations.length + internalNettings.length));
-            for (const item of internalNettings) {
+            txs.push(await buildStartClearingSessionTx(program, externalLeaves.length + internalLeaves.length));
+            txs.push(
+                await buildCommitSessionPlanTx(
+                    program,
+                    merkleRoot,
+                    externalLeaves.length,
+                    internalLeaves.length,
+                    nextSessionId
+                )
+            );
+            for (const item of internalLeaves) {
                 txs.push(
-                    await buildApplyInternalNettingTx(
+                    await buildApplyInternalNettingWithProofTx(
                         program,
-                        new PublicKey(item.obligation),
-                        Number(item.amount),
+                        item,
                         nextSessionId
                     )
                 );
             }
-            for (const item of allocations) {
+            for (const item of externalLeaves) {
                 txs.push(
-                    await buildCreatePositionByObligationTx(
+                    await buildApplyExternalSettlementWithProofTx(
                         program,
-                        new PublicKey(item.obligation),
-                        Number(item.amount),
+                        item,
                         nextSessionId
                     )
                 );
@@ -266,29 +298,81 @@ export default function AdminPanel() {
                 logClearing(requestId, "tx confirmed", { index: i, signature: sig });
             }
         } else {
-            logClearing(requestId, "sequential mode session start");
-            await startClearingSession(program, allocations.length + internalNettings.length);
-            for (const item of internalNettings) {
-                logClearing(requestId, "applyInternalNetting tx", item);
-                await applyInternalNetting(
-                    program,
-                    new PublicKey(item.obligation),
-                    Number(item.amount)
-                );
-            }
-            for (const item of allocations) {
-                logClearing(requestId, "createPosition tx", item);
-                await createPositionByObligation(
-                    program,
-                    new PublicKey(item.obligation),
-                    Number(item.amount)
-                );
-            }
-            await finalizeClearingSession(program);
-            logClearing(requestId, "sequential mode session finalized");
+            throw new Error("Wallet does not support signAllTransactions for merkle batch pipeline");
         }
         logClearing(requestId, "on-chain execution finished");
     }
+
+    const buildOnChainOperations = (
+        result: NonNullable<ClearingApiResponse["data"]>
+    ): {
+        merkleRoot: string;
+        externalLeaves: {
+            index: number;
+            from: string;
+            to: string;
+            amount: number;
+            leaf_hash: string;
+            proof: string[];
+        }[];
+        internalLeaves: {
+            index: number;
+            obligation: string;
+            amount: number;
+            leaf_hash: string;
+            proof: string[];
+        }[];
+    } => {
+        const merkleRoot = (result.merkle_root || "").trim();
+        if (!/^[0-9a-fA-F]{64}$/.test(merkleRoot)) {
+            throw new Error("В результате отсутствует корректный merkle_root");
+        }
+        const leaves = result.merkle_leaves || [];
+        const leavesByKey = new Map<string, typeof leaves>();
+        for (const leaf of leaves) {
+            const key = `${leaf.kind}|${leaf.obligation}|${Number(leaf.amount)}`;
+            const bucket = leavesByKey.get(key) || [];
+            bucket.push(leaf);
+            leavesByKey.set(key, bucket);
+        }
+        const takeLeaf = (kind: "external" | "internal", obligation: string, amount: number) => {
+            const key = `${kind}|${obligation}|${Number(amount)}`;
+            const bucket = leavesByKey.get(key);
+            if (!bucket || bucket.length === 0) {
+                throw new Error(`Merkle leaf not found for ${key}`);
+            }
+            return bucket.shift()!;
+        };
+
+        const externalLeaves = result.data.map((item) => {
+            const obligation = `${item.from}->${item.to}`;
+            const leaf = takeLeaf("external", obligation, Number(item.amount));
+            return {
+                index: leaf.index,
+                from: item.from,
+                to: item.to,
+                amount: Number(item.amount),
+                leaf_hash: leaf.leaf_hash,
+                proof: leaf.proof,
+            };
+        });
+
+        const internalLeaves = result.internal_data
+            .filter((item) => Number(item.flow_used || 0) > 0)
+            .map((item) => {
+                const used = Number(item.flow_used || 0);
+                const leaf = takeLeaf("internal", item.obligation, used);
+                return {
+                    index: leaf.index,
+                    obligation: item.obligation,
+                    amount: used,
+                    leaf_hash: leaf.leaf_hash,
+                    proof: leaf.proof,
+                };
+            });
+
+        return { merkleRoot, externalLeaves, internalLeaves };
+    };
 
     const fetchClearingResult = async (requestId: string, endpoint: "run" | "last"): Promise<ClearingApiResponse["data"]> => {
         const payload = await signAdminRequest();
@@ -364,15 +448,16 @@ export default function AdminPanel() {
                 toast.warn("Результат клиринга устарел. Запусти клиринг повторно.");
                 return;
             }
-            await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
+            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
+            await executeOnChainAllocations(requestId, result);
             setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
-                processed: result.data.length + (result.internal_data?.length || 0),
+                processed: externalLeaves.length + internalLeaves.length,
             });
 
-            toast.success(`Клиринг завершен. Обработано обязательств: ${result.data.length + (result.internal_data?.length || 0)}`);
+            toast.success(`Клиринг завершен. Обработано обязательств: ${externalLeaves.length + internalLeaves.length}`);
         } catch (error) {
             logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при проведении операции')
@@ -425,14 +510,15 @@ export default function AdminPanel() {
                 return;
             }
 
-            await executeOnChainAllocations(requestId, result.data, result.internal_data || []);
+            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
+            await executeOnChainAllocations(requestId, result);
             setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
-                processed: result.data.length + (result.internal_data?.length || 0),
+                processed: externalLeaves.length + internalLeaves.length,
             });
-            toast.success(`Обработан последний результат сессии. Обязательств: ${result.data.length + (result.internal_data?.length || 0)}`);
+            toast.success(`Обработан последний результат сессии. Обязательств: ${externalLeaves.length + internalLeaves.length}`);
         } catch (error) {
             logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при обработке последнего результата')

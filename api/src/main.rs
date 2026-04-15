@@ -1,5 +1,6 @@
 mod auth_service;
 mod cron_worker;
+mod flow_solver;
 mod handlers;
 mod indexer;
 mod ledger_engine;

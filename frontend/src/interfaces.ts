@@ -72,6 +72,7 @@ export interface Bill {
 
 export interface ClearingAuditLeaf {
     kind: string;
+    index: number;
     obligation: string;
     amount: number;
     leaf_hash: string;
@@ -98,10 +99,25 @@ export interface ClearingAuditResult {
         status: string;
         timestamp: number;
     }[];
-    data: { obligation: string; amount: number }[];
-    internal_data: { obligation: string; amount: number }[];
+    data: { from: string; to: string; amount: number }[];
+    internal_data: {
+        obligation: string;
+        /** Остаток на ребре в модели после internal в этой сессии (не сумма on-chain tx). */
+        amount: number;
+        /** Сумма в merkle / apply_internal (встречное A↔B + MCMF по остатку). */
+        flow_used?: number;
+        edge_used_in_flow?: boolean;
+        edge_used_in_cycle?: boolean;
+    }[];
+    external_count?: number;
+    internal_count?: number;
     merkle_root: string;
     merkle_leaves: ClearingAuditLeaf[];
+    allocator_mode?: "direct" | "transitive" | "full_fallback" | string;
+    fallback_reason?: string | null;
+    flow_total_cost?: number | null;
+    flow_objective?: string | null;
+    flow_unmet_demand?: number | null;
     audit_log: ClearingAuditLogEntry[];
     timestamp: number;
 }

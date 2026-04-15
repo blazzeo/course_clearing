@@ -280,12 +280,11 @@ pub async fn get_last_clearing_audit_for_wallet(
         let s = worker_state.read().await;
         s.last_session_result.clone()
     };
-    let mut obligation_ids: Vec<String> = result
-        .data
+    let obligation_ids: Vec<String> = result
+        .internal_data
         .iter()
         .map(|x| x.obligation.clone())
         .collect();
-    obligation_ids.extend(result.internal_data.iter().map(|x| x.obligation.clone()));
     if obligation_ids.is_empty() {
         return HttpResponse::Ok().json(ApiResponse::success(result));
     }
@@ -312,13 +311,22 @@ pub async fn get_last_clearing_audit_for_wallet(
 
     let matched: HashSet<String> = matching.into_iter().collect();
     let mut filtered = result.clone();
-    filtered.data.retain(|x| matched.contains(&x.obligation));
+    filtered
+        .data
+        .retain(|x| x.from == wallet || x.to == wallet);
     filtered
         .internal_data
         .retain(|x| matched.contains(&x.obligation));
-    filtered
-        .merkle_leaves
-        .retain(|x| matched.contains(&x.obligation));
+    filtered.merkle_leaves.retain(|x| {
+        if x.kind == "internal" {
+            matched.contains(&x.obligation)
+        } else {
+            let mut parts = x.obligation.split("->");
+            let from = parts.next().unwrap_or_default();
+            let to = parts.next().unwrap_or_default();
+            from == wallet || to == wallet
+        }
+    });
 
     HttpResponse::Ok().json(ApiResponse::success(filtered))
 }
