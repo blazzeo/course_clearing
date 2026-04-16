@@ -51,6 +51,9 @@ export default function Home() {
                             <Link to="/bills" className="btn btn-secondary">
                                 Мои счета
                             </Link>
+                            <Link to="/sessions" className="btn btn-secondary">
+                                Мои сессии
+                            </Link>
                         </>
                     )}
                 </div>

@@ -145,12 +145,13 @@ async fn persist_event(
             sqlx::query(
                 r#"
                 INSERT INTO obligations (pda, from_address, to_address, original_amount, remaining_amount, status, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $4, 'created', $5, $5)
+                VALUES ($1, $2, $3, $4, $4, $5, 'created', $6, $6)
                 ON CONFLICT (pda) DO UPDATE SET
                     from_address = EXCLUDED.from_address,
                     to_address = EXCLUDED.to_address,
                     original_amount = EXCLUDED.original_amount,
                     remaining_amount = EXCLUDED.remaining_amount,
+                    expecting_clearing_session = EXCLUDED.expecting_clearing_session,
                     status = EXCLUDED.status,
                     updated_at = EXCLUDED.updated_at
                 "#,
@@ -159,6 +160,7 @@ async fn persist_event(
             .bind(e.from.to_string())
             .bind(e.to.to_string())
             .bind(i64::try_from(e.amount).unwrap_or(i64::MAX))
+            .bind(i64::try_from(e.expecting_clearing_session).unwrap_or(i64::MAX))
             .bind(e.timestamp)
             .execute(pool)
             .await?;
@@ -167,7 +169,7 @@ async fn persist_event(
                 r#"
                 INSERT INTO events (tx_signature, event_type, data, created_at)
                 VALUES ($1, 'obligation_created',
-                    jsonb_build_object('obligation', $2, 'from', $3, 'to', $4, 'amount', $5), $6)
+                    jsonb_build_object('obligation', $2, 'from', $3, 'to', $4, 'amount', $5, 'expecting_clearing_session', $6), $7)
                 ON CONFLICT (tx_signature) DO NOTHING
                 "#,
             )
@@ -176,6 +178,7 @@ async fn persist_event(
             .bind(e.from.to_string())
             .bind(e.to.to_string())
             .bind(i64::try_from(e.amount).unwrap_or(i64::MAX))
+            .bind(i64::try_from(e.expecting_clearing_session).unwrap_or(i64::MAX))
             .bind(e.timestamp)
             .execute(pool)
             .await?;

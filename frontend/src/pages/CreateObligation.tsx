@@ -2,7 +2,7 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
-import { getParticipantByUserName, getParticipantsFromDb, getPool, getPoolPda, registerObligation, useProgram } from '../api'
+import { getClearingState, getParticipantByUserName, getParticipantsFromDb, getPool, getPoolPda, registerObligation, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
 import { ParticipantDirectoryEntry } from '../interfaces'
 import { API_URL } from '../main'
@@ -14,6 +14,8 @@ export default function CreateObligation() {
     const [counterparty, setCounterparty] = useState('')
     const [counterpartyName, setCounterpartyName] = useState('')
     const [amount, setAmount] = useState('')
+    const [expectingClearingSession, setExpectingClearingSession] = useState('0')
+    const [minExpectingClearingSession, setMinExpectingClearingSession] = useState(1)
     const [loading, setLoading] = useState(false)
     const [lookupLoading, setLookupLoading] = useState(false)
     const [participants, setParticipants] = useState<ParticipantDirectoryEntry[]>([])
@@ -34,6 +36,24 @@ export default function CreateObligation() {
 
         loadParticipants()
     }, [])
+
+    useEffect(() => {
+        const loadMinExpectedSession = async () => {
+            if (!program) return
+            try {
+                const state = await getClearingState(program)
+                const minSession = state.total_sessions + 1
+                setMinExpectingClearingSession(minSession)
+                setExpectingClearingSession((current) => {
+                    const currentNum = Math.floor(Number(current) || 0)
+                    return String(Math.max(currentNum, minSession))
+                })
+            } catch (error) {
+                console.error('Error loading clearing state:', error)
+            }
+        }
+        loadMinExpectedSession()
+    }, [program])
 
     const availableParticipants = useMemo(() => {
         if (!publicKey) return participants
@@ -125,7 +145,19 @@ export default function CreateObligation() {
             }
 
             // Creator is creditor (`to`) and will receive funds.
-            const tx = await registerObligation(program, counterPartyPubkey, publicKey, amountLamports, pool_id, timestamp);
+            const expectedSession = Math.max(
+                minExpectingClearingSession,
+                Math.floor(Number(expectingClearingSession) || 0)
+            )
+            const tx = await registerObligation(
+                program,
+                counterPartyPubkey,
+                publicKey,
+                amountLamports,
+                pool_id,
+                timestamp,
+                expectedSession
+            );
 
             const latestBlockhash = await program.provider.connection.getLatestBlockhash();
 
@@ -166,7 +198,7 @@ export default function CreateObligation() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
                             <label className="label">
-                                Выбрать пользователя из БД
+                                Выбрать пользователя из списка
                             </label>
                             <select
                                 className="input"
@@ -232,6 +264,7 @@ export default function CreateObligation() {
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
+                                justifyContent: 'space-between',
                                 gap: '10px',
                                 flexWrap: 'wrap',
                                 padding: '12px',
@@ -240,54 +273,76 @@ export default function CreateObligation() {
                                 background: '#f8fafc',
                             }}
                         >
-                            <div
-                                style={{
-                                    minWidth: '220px',
-                                    maxWidth: '320px',
-                                    padding: '8px 10px',
-                                    borderRadius: '6px',
-                                    border: '1px solid #cbd5e1',
-                                    background: '#fff',
-                                    fontFamily: 'monospace',
-                                    fontSize: '13px',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                }}
-                                title={counterparty || 'other participant'}
-                            >
-                                {counterparty || 'other participant'}
+                            <div>
+                                Кто
+                                <div
+                                    style={{
+                                        minWidth: '220px',
+                                        maxWidth: '300px',
+                                        padding: '12px',
+                                        borderRadius: '6px',
+                                        border: '1px solid #cbd5e1',
+                                        background: '#fff',
+                                        fontFamily: 'monospace',
+                                        fontSize: '13px',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                    title={counterparty || 'Контрагент'}
+                                >
+                                    {counterparty || 'Контрагент'}
+                                </div>
                             </div>
                             <span style={{ color: '#64748b', fontWeight: 600 }}>--</span>
-                            <input
-                                type="number"
-                                step="0.000000001"
-                                className="input"
-                                value={amount}
-                                onChange={(e) => setAmount(e.target.value)}
-                                placeholder="SOL amount"
-                                required
-                                min="0"
-                                style={{ width: '160px', margin: 0 }}
-                            />
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                Сколько
+                                <input
+                                    type="number"
+                                    step="0.000000001"
+                                    className="input"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    placeholder="SOL amount"
+                                    required
+                                    min="0"
+                                    style={{ width: '140px', margin: 0 }}
+                                />
+                            </div>
                             <span style={{ color: '#64748b', fontWeight: 600 }}>--&gt;</span>
-                            <div
-                                style={{
-                                    minWidth: '220px',
-                                    maxWidth: '320px',
-                                    padding: '8px 10px',
-                                    borderRadius: '6px',
-                                    border: '1px solid #cbd5e1',
-                                    background: '#fff',
-                                    fontFamily: 'monospace',
-                                    fontSize: '13px',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                }}
-                                title={publicKey?.toBase58() || 'current participant'}
-                            >
-                                {publicKey?.toBase58() || 'current participant'}
+                            <div>
+                                Кому
+                                <div
+                                    style={{
+                                        minWidth: '220px',
+                                        maxWidth: '300px',
+                                        padding: '12px',
+                                        borderRadius: '6px',
+                                        border: '1px solid #cbd5e1',
+                                        background: '#fff',
+                                        fontFamily: 'monospace',
+                                        fontSize: '13px',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                    title={publicKey?.toBase58() || 'current participant'}
+                                >
+                                    {publicKey?.toBase58() || 'current participant'}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                Когда
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={expectingClearingSession}
+                                    onChange={(e) => setExpectingClearingSession(e.target.value)}
+                                    min={minExpectingClearingSession}
+                                    step="1"
+                                    placeholder={`Минимум: ${minExpectingClearingSession}`}
+                                    style={{ maxWidth: '180', margin: 0 }}
+                                />
                             </div>
                         </div>
                     </div>

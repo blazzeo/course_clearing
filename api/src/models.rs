@@ -51,6 +51,7 @@ pub struct DbObligationRecord {
     pub to_address: String,
     pub original_amount: i64,
     pub remaining_amount: i64,
+    pub expecting_clearing_session: i64,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,

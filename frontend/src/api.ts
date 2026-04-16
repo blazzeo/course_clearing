@@ -16,6 +16,7 @@ type DbObligationApiItem = {
     to_address: string;
     original_amount: number;
     remaining_amount: number;
+    expecting_clearing_session: number;
     status: string;
     created_at: number;
     updated_at: number;
@@ -126,7 +127,8 @@ export async function registerObligation(
     to: PublicKey,
     amount: number,
     pool_id: number,
-    timestamp?: number
+    timestamp?: number,
+    expectingClearingSession: number = 0
 ) {
     const authority = program.provider.publicKey;
 
@@ -136,8 +138,8 @@ export async function registerObligation(
 
     const amt = new BN(amount)
 
-    return await program.methods
-        .registerObligation(from, to, amt, id, ts)
+    return await (program.methods as any)
+        .registerObligation(from, to, amt, id, ts, new BN(expectingClearingSession))
         .accounts({
             authority,
         })
@@ -1132,6 +1134,7 @@ export async function getObligationsByParticipantFromDb(
         to: new PublicKey(row.to_address),
         amount: row.remaining_amount,
         originalAmount: row.original_amount,
+        expectingClearingSession: row.expecting_clearing_session,
         timestamp: row.created_at,
         sessionId: 0,
         fromCancel: false,
@@ -1155,6 +1158,7 @@ export async function getAllObligationsFromDb(apiUrl: string): Promise<Obligatio
         to: new PublicKey(row.to_address),
         amount: row.remaining_amount,
         originalAmount: row.original_amount,
+        expectingClearingSession: row.expecting_clearing_session,
         timestamp: row.created_at,
         sessionId: 0,
         fromCancel: false,

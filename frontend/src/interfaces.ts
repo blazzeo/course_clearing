@@ -19,6 +19,8 @@ export interface Obligation {
     amount: number;
     /** Исходный номинал при создании (только для строк из БД). */
     originalAmount?: number;
+    /** Минимальный номер клиринговой сессии, в которую можно включать обязательство. */
+    expectingClearingSession?: number;
     timestamp: number;
     sessionId: number;
     fromCancel: boolean;

@@ -54,6 +54,7 @@ pub mod clearing_solana {
         amount: u64,
         pool_id: u32,
         timestamp: i64,
+        expecting_clearing_session: u64,
     ) -> Result<()> {
         let clock = Clock::get()?;
 
@@ -70,6 +71,7 @@ pub mod clearing_solana {
         obligation.to = to;
         obligation.amount = amount;
         obligation.timestamp = timestamp;
+        obligation.expecting_clearing_session = expecting_clearing_session;
         obligation.session_id = None;
         obligation.bump = ctx.bumps.new_obligation;
         obligation.pool_id = pool_id;
@@ -98,7 +100,8 @@ pub mod clearing_solana {
             from,
             to,
             amount,
-            timestamp: clock.unix_timestamp
+            timestamp: clock.unix_timestamp,
+            expecting_clearing_session,
         });
 
         Ok(())
@@ -1230,6 +1233,7 @@ pub struct Obligation {
     pub to: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
+    pub expecting_clearing_session: u64,
     pub session_id: Option<u64>, // default None (no session_id is linked at first)
     pub from_cancel: bool,
     pub to_cancel: bool,
@@ -1243,6 +1247,7 @@ impl Obligation {
         32 + // to
         8 + // amount
         8 + // timestamp
+        8 + // expecting_clearing_session
         16 + // session_id
         1 + // from_cancel
         1 + // to_cancel
@@ -1679,7 +1684,7 @@ pub enum ConfirmObligationError {
 }
 
 #[derive(Accounts)]
-#[instruction(from: Pubkey, to: Pubkey, amount: u64, pool_id: u32, timestamp: i64)]
+#[instruction(from: Pubkey, to: Pubkey, amount: u64, pool_id: u32, timestamp: i64, expecting_clearing_session: u64)]
 pub struct RegisterObligation<'info> {
     #[account(
         mut,
@@ -2307,6 +2312,7 @@ pub struct ObligationCreated {
     pub to: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
+    pub expecting_clearing_session: u64,
 }
 
 #[event]

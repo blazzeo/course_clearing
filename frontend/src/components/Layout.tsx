@@ -160,17 +160,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         fontWeight: location.pathname === '/obligations' ? '600' : '400'
                                     }}
                                 >
-                                    Мои позиции
-                                </Link>
-                                <Link
-                                    to="/obligations/create"
-                                    style={{
-                                        textDecoration: 'none',
-                                        color: location.pathname === '/obligations/create' ? '#667eea' : '#666',
-                                        fontWeight: location.pathname === '/obligations/create' ? '600' : '400'
-                                    }}
-                                >
-                                    Создать позицию
+                                    Позиции
                                 </Link>
                                 <Link
                                     to="/bills"
@@ -180,7 +170,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         fontWeight: location.pathname === '/bills' ? '600' : '400'
                                     }}
                                 >
-                                    Мои счета
+                                    Cчета
                                 </Link>
                                 <Link
                                     to="/sessions"
@@ -190,7 +180,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         fontWeight: location.pathname === '/sessions' ? '600' : '400'
                                     }}
                                 >
-                                    Мои сессии
+                                    Сессии
                                 </Link>
                             </>
                         )}

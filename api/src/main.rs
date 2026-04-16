@@ -48,6 +48,8 @@ async fn main() -> std::io::Result<()> {
     let (solana_rpc_url, port, admin_pubkey, database_url, solana_ws_url) = parse_env();
 
     let rpc_client = RpcClient::new(solana_rpc_url.clone());
+
+    // Data base initialization
     let db_pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
@@ -58,13 +60,13 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Can't run migrations");
 
+    //  Cron worker initialization
+    let (sender, receiver) = mpsc::channel(10);
     let worker_state = Arc::new(tokio::sync::RwLock::new(
         WorkerState::new(rpc_client, db_pool.clone())
             .await
             .expect("Can't init worker state"),
     ));
-
-    let (sender, receiver) = mpsc::channel(10);
     let mut cron_worker = CronWorker::new(worker_state.clone(), receiver);
     cron_worker.start();
 
@@ -72,6 +74,8 @@ async fn main() -> std::io::Result<()> {
     let used_nonces = Arc::new(tokio::sync::RwLock::new(HashMap::<String, i64>::new()));
     let metrics = Arc::new(handlers::AppMetrics::new());
     let frontend_origin = env::var("FRONTEND_ORIGIN").ok();
+
+    //  Indexer loop
     tokio::spawn(indexer::index_loop(
         solana_ws_url,
         solana_rpc_url.clone(),
@@ -105,24 +109,25 @@ async fn main() -> std::io::Result<()> {
             .route("/live", web::get().to(handlers::liveness))
             .route("/ready", web::get().to(handlers::readiness))
             .route("/metrics", web::get().to(handlers::metrics))
-            // Один scope `/api`: несколько `scope("/api")` подряд в Actix дают 404 на путях из
-            // «хвостовых» scope — запрос застревает в первом scope без подходящего route.
             .service(
                 web::scope("/api")
-                    .route("/clearing/run", web::post().to(handlers::multi_party_clearing))
+                    .route(
+                        "/clearing/run",
+                        web::post().to(handlers::multi_party_clearing),
+                    )
                     .route(
                         "/clearing/last",
                         web::post().to(handlers::get_last_clearing_result),
                     )
-                    .route(
-                        "/obligations",
-                        web::get().to(handlers::get_all_obligations),
-                    )
+                    .route("/obligations", web::get().to(handlers::get_all_obligations))
                     .route(
                         "/obligations/{wallet}",
                         web::get().to(handlers::get_obligations_by_wallet),
                     )
-                    .route("/participants", web::get().to(handlers::get_all_participants))
+                    .route(
+                        "/participants",
+                        web::get().to(handlers::get_all_participants),
+                    )
                     .route(
                         "/participants/{authority}",
                         web::get().to(handlers::get_participant_by_authority),

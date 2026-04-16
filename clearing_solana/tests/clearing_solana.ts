@@ -118,7 +118,7 @@ describe("clearing_solana", () => {
     timestamp: number
   ) => {
     await program.methods
-      .registerObligation(from.publicKey, to.publicKey, new BN(amount), 0, new BN(timestamp))
+      .registerObligation(from.publicKey, to.publicKey, new BN(amount), 0, new BN(timestamp), new BN(0))
       .accounts({
         state: statePda,
         newObligation: obligationPda(from.publicKey, to.publicKey, timestamp),
@@ -240,17 +240,17 @@ describe("clearing_solana", () => {
     const t3 = t1 + 2;
 
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(5_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(5_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();
     await program.methods
-      .registerObligation(b.publicKey, c.publicKey, new BN(5_000_000_000), 0, new BN(t2))
+      .registerObligation(b.publicKey, c.publicKey, new BN(5_000_000_000), 0, new BN(t2), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(b.publicKey, c.publicKey, t2), participant: participantPda(c.publicKey), pool: rootPoolPda, authority: c.publicKey, systemProgram: SystemProgram.programId })
       .signers([c])
       .rpc();
     await program.methods
-      .registerObligation(c.publicKey, a.publicKey, new BN(5_000_000_000), 0, new BN(t3))
+      .registerObligation(c.publicKey, a.publicKey, new BN(5_000_000_000), 0, new BN(t3), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(c.publicKey, a.publicKey, t3), participant: participantPda(a.publicKey), pool: rootPoolPda, authority: a.publicKey, systemProgram: SystemProgram.programId })
       .signers([a])
       .rpc();
@@ -317,12 +317,12 @@ describe("clearing_solana", () => {
     const t1 = Math.floor(Date.now() / 1000) + 100;
     const t2 = t1 + 1;
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(10_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(10_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();
     await program.methods
-      .registerObligation(b.publicKey, a.publicKey, new BN(4_000_000_000), 0, new BN(t2))
+      .registerObligation(b.publicKey, a.publicKey, new BN(4_000_000_000), 0, new BN(t2), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(b.publicKey, a.publicKey, t2), participant: participantPda(a.publicKey), pool: rootPoolPda, authority: a.publicKey, systemProgram: SystemProgram.programId })
       .signers([a])
       .rpc();
@@ -417,7 +417,7 @@ describe("clearing_solana", () => {
 
     const t1 = Math.floor(Date.now() / 1000) + 200;
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(2_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(2_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();
@@ -464,7 +464,7 @@ describe("clearing_solana", () => {
 
     const t1 = Math.floor(Date.now() / 1000) + 300;
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(9_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(9_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();
@@ -542,7 +542,7 @@ describe("clearing_solana", () => {
 
     const t1 = Math.floor(Date.now() / 1000) + 400;
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(1_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(1_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();
@@ -622,7 +622,7 @@ describe("clearing_solana", () => {
 
     const t1 = Math.floor(Date.now() / 1000) + 500;
     await program.methods
-      .registerObligation(a.publicKey, b.publicKey, new BN(2_000_000_000), 0, new BN(t1))
+      .registerObligation(a.publicKey, b.publicKey, new BN(2_000_000_000), 0, new BN(t1), new BN(0))
       .accounts({ state: statePda, newObligation: obligationPda(a.publicKey, b.publicKey, t1), participant: participantPda(b.publicKey), pool: rootPoolPda, authority: b.publicKey, systemProgram: SystemProgram.programId })
       .signers([b])
       .rpc();

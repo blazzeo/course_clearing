@@ -72,6 +72,7 @@ pub struct InputObligationSnapshot {
     pub from: String,
     pub to: String,
     pub amount: u64,
+    pub expecting_clearing_session: u64,
     pub status: String,
     pub timestamp: i64,
 }
@@ -517,6 +518,7 @@ impl CronWorker {
                 from: Pubkey::new_from_array(o.from.to_bytes()).to_string(),
                 to: Pubkey::new_from_array(o.to.to_bytes()).to_string(),
                 amount: o.amount,
+                expecting_clearing_session: o.expecting_clearing_session,
                 status: status_to_string(o.status).to_string(),
                 timestamp: o.timestamp,
             })
@@ -535,7 +537,9 @@ impl CronWorker {
             let s = self.state.read().await;
             (s.session_id, s.solana_client.clone(), s.db_pool.clone())
         };
-        let all_obligations = Self::collect_obligations(client.as_ref()).await;
+        let target_session_id = sid + 1;
+        let all_obligations =
+            Self::collect_obligations(client.as_ref(), target_session_id).await;
 
         tracing::info!("[Clearing session № {} started!]", sid);
         let mut audit_log = vec![AuditLogEntry {
@@ -557,7 +561,10 @@ impl CronWorker {
                     ObligationStatus::Netted => "netted",
                     ObligationStatus::Cancelled => "cancelled",
                 };
-                format!("{}->{} amount={} status={}", from, to, o.amount, status)
+                format!(
+                    "{}->{} amount={} status={} expecting_session={}",
+                    from, to, o.amount, status, o.expecting_clearing_session
+                )
             })
             .collect();
         input_edges.sort();
@@ -644,7 +651,7 @@ impl CronWorker {
             allocations.len(),
             internal_data.len()
         );
-        let next_session_id = sid + 1;
+        let next_session_id = target_session_id;
         let input_obligations = Self::build_input_snapshot(&all_obligations);
         let input_snapshot_hash = Self::hash_input_snapshot(&input_obligations);
         let solver_version = env!("CARGO_PKG_VERSION").to_string();
@@ -755,6 +762,7 @@ impl CronWorker {
             hasher.update(item.from.as_bytes());
             hasher.update(item.to.as_bytes());
             hasher.update(item.amount.to_le_bytes());
+            hasher.update(item.expecting_clearing_session.to_le_bytes());
             hasher.update(item.status.as_bytes());
             hasher.update(item.timestamp.to_le_bytes());
         }
@@ -914,7 +922,10 @@ impl CronWorker {
         (root, proofs)
     }
 
-    async fn collect_obligations(client: &RpcClient) -> Vec<(Pubkey, Obligation)> {
+    async fn collect_obligations(
+        client: &RpcClient,
+        target_session_id: u64,
+    ) -> Vec<(Pubkey, Obligation)> {
         let mut all_obligations: Vec<(Pubkey, Obligation)> = vec![];
 
         let (first_pool_pda, _bump) = ObligationPool::pda(0);
@@ -956,8 +967,9 @@ impl CronWorker {
                     if let Ok(obligation_account) = Obligation::try_deserialize(&mut raw_data) {
                         let status = obligation_account.status;
 
-                        if status == ObligationStatus::Confirmed
-                            || status == ObligationStatus::PartiallyNetted
+                        if (status == ObligationStatus::Confirmed
+                            || status == ObligationStatus::PartiallyNetted)
+                            && obligation_account.expecting_clearing_session <= target_session_id
                         {
                             all_obligations.push((*pda, obligation_account));
                         }
@@ -1000,6 +1012,7 @@ mod tests {
             to: anchor_lang::prelude::Pubkey::new_from_array(to.to_bytes()),
             amount,
             timestamp,
+            expecting_clearing_session: 0,
             session_id: None,
             from_cancel: false,
             to_cancel: false,
