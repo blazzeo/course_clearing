@@ -67,3 +67,10 @@ pub struct DbClearingSessionRow {
     pub internal_count: i32,
     pub created_at: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromRow)]
+pub struct DbParticipantRecord {
+    pub pda: String,
+    pub authority: String,
+    pub user_name: String,
+}

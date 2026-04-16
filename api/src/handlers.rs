@@ -260,6 +260,57 @@ pub async fn get_all_obligations(
     }
 }
 
+pub async fn get_all_participants(db_pool: web::Data<PgPool>) -> impl Responder {
+    let rows = sqlx::query_as::<_, DbParticipantRecord>(
+        r#"
+        SELECT pda, authority, user_name
+        FROM participants
+        ORDER BY lower(user_name), authority
+        "#,
+    )
+    .fetch_all(db_pool.get_ref())
+    .await;
+
+    match rows {
+        Ok(data) => HttpResponse::Ok().json(ApiResponse::success(data)),
+        Err(err) => {
+            tracing::error!("Failed to fetch participants from DB: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
+}
+
+pub async fn get_participant_by_authority(
+    db_pool: web::Data<PgPool>,
+    authority: web::Path<String>,
+) -> impl Responder {
+    let authority = authority.into_inner();
+    let row = sqlx::query_as::<_, DbParticipantRecord>(
+        r#"
+        SELECT pda, authority, user_name
+        FROM participants
+        WHERE authority = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(authority)
+    .fetch_optional(db_pool.get_ref())
+    .await;
+
+    match row {
+        Ok(Some(data)) => HttpResponse::Ok().json(ApiResponse::success(data)),
+        Ok(None) => {
+            HttpResponse::NotFound().json(ApiResponse::<String>::error("participant not found".into()))
+        }
+        Err(err) => {
+            tracing::error!("Failed to fetch participant from DB: {err:?}");
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("database query failed".into()))
+        }
+    }
+}
+
 pub async fn get_last_clearing_audit(
     worker_state: web::Data<Arc<tokio::sync::RwLock<WorkerState>>>,
 ) -> impl Responder {

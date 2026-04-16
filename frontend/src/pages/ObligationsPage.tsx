@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { cancelObligation, confirmObligation, declineObligation, getLastClearingAudit, getObligationsByParticipantFromDb, getObligationsByParticipantFromPools, useProgram } from '../api'
-import { ClearingAuditResult, Obligation, ObligationStatus } from '../interfaces'
+import { cancelObligation, confirmObligation, declineObligation, getObligationsByParticipantFromDb, getObligationsByParticipantFromPools, useProgram } from '../api'
+import { Obligation, ObligationStatus } from '../interfaces'
 import { ClipLoader } from "react-spinners";
 import { API_URL } from '../main'
 
@@ -34,7 +34,8 @@ export default function ObligationsPage() {
     const [dateFrom, setDateFrom] = useState<string>('')
     const [dateTo, setDateTo] = useState<string>('')
     const [actionLoading, setActionLoading] = useState<Obligation | null>(null)
-    const [userAudit, setUserAudit] = useState<ClearingAuditResult | null>(null)
+    const [viewMode, setViewMode] = useState<'creditor' | 'debitor'>('creditor')
+    // const [userAudit, setUserAudit] = useState<ClearingAuditResult | null>(null)
 
     const { publicKey } = useWallet()
     const program = useProgram()
@@ -65,6 +66,21 @@ export default function ObligationsPage() {
         return list
     }, [allObligations, filter, dateFrom, dateTo])
 
+    const groupedObligations = useMemo(() => {
+        if (!publicKey) {
+            return { creditor: [] as Obligation[], debitor: [] as Obligation[] }
+        }
+        return {
+            creditor: filteredObligations.filter((obligation) => obligation.to.equals(publicKey)),
+            debitor: filteredObligations.filter((obligation) => obligation.from.equals(publicKey)),
+        }
+    }, [filteredObligations, publicKey])
+
+    const activeObligations = useMemo(
+        () => (viewMode === 'creditor' ? groupedObligations.creditor : groupedObligations.debitor),
+        [groupedObligations, viewMode]
+    )
+
     const loadPositions = async () => {
         if (!publicKey || !program) {
             return
@@ -81,13 +97,6 @@ export default function ObligationsPage() {
             }
 
             setAllObligations(obligations)
-            try {
-                const audit = await getLastClearingAudit(API_URL, publicKey)
-                setUserAudit(audit)
-            } catch (auditError) {
-                console.warn('Failed to load user clearing audit', auditError)
-                setUserAudit(null)
-            }
         } catch (error) {
             console.error('Error loading obligations:', error)
         } finally {
@@ -108,7 +117,7 @@ export default function ObligationsPage() {
         try {
             setActionLoading(obligation)
 
-            const tx = await cancelObligation(program, obligation);
+            await cancelObligation(program, obligation);
 
             toast.success('Позиция успешно отклонена!')
             loadPositions()
@@ -134,7 +143,7 @@ export default function ObligationsPage() {
         try {
             setActionLoading(obligation)
 
-            const tx = await declineObligation(program, obligation);
+            await declineObligation(program, obligation);
 
             toast.success('Позиция успешно отклонена!')
             loadPositions()
@@ -154,7 +163,7 @@ export default function ObligationsPage() {
         }
 
         try {
-            const tx = await confirmObligation(program, obligation)
+            await confirmObligation(program, obligation)
 
             toast.success('Позиция подтверждена успешно!')
             loadPositions()
@@ -202,105 +211,18 @@ export default function ObligationsPage() {
         return "Отмена запрошена кредитором"
     }
 
-    // Если кошелёк не подключён — возвращаем пустую страницу
-    if (!publicKey) {
-        return <h1 style={{ color: '#eee' }}>Доступно только авторизованным пользователям</h1>
-    }
-
-    return (
-        <div>
-            <div className="card">
-                {userAudit && (
-                    <div style={{ marginBottom: '20px', padding: '12px', background: '#f8f9ff', borderRadius: '8px', border: '1px solid #dfe4ff' }}>
-                        <h3 style={{ marginBottom: '8px', color: '#333' }}>Последняя сессия клиринга (ваши данные)</h3>
-                        <p style={{ marginBottom: '6px', color: '#555' }}>
-                            Session #{userAudit.session_id}, external: {userAudit.data.length}, internal: {userAudit.internal_data.length}
-                        </p>
-                        <p style={{ marginBottom: '8px', color: '#333', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                            Merkle root: {userAudit.merkle_root || '-'}
-                        </p>
-                        <details>
-                            <summary style={{ cursor: 'pointer', color: '#667eea' }}>Показать шаги сессии</summary>
-                            <div style={{ marginTop: '8px', maxHeight: '140px', overflowY: 'auto' }}>
-                                {userAudit.audit_log.map((entry, idx) => (
-                                    <div key={`${entry.step}-${idx}`} style={{ fontSize: '13px', color: '#444', marginBottom: '4px' }}>
-                                        <b>{entry.step}</b>: {entry.detail}
-                                    </div>
-                                ))}
-                            </div>
-                        </details>
-                    </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-                    <h1 style={{ color: '#333' }}>Клиринговые позиции</h1>
-                    <Link to="/obligations/create" className="btn btn-primary">
-                        Создать позицию
-                    </Link>
-                </div>
-
-                <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
-                    <div>
-                        <label className="label">Фильтр по статусу:</label>
-                        <select
-                            className="input"
-                            value={filter}
-                            onChange={(e) => setFilter(parseInt(e.target.value))}
-                            style={{ width: 'auto', display: 'inline-block', marginLeft: '8px' }}
-                        >
-                            <option value={ObligationStatus.All}>Все</option>
-                            <option value={ObligationStatus.Created}>Ожидают подтверждения</option>
-                            <option value={ObligationStatus.Confirmed}>Подтверждены</option>
-                            <option value={ObligationStatus.PartiallyNetted}>Частично погашены</option>
-                            <option value={ObligationStatus.Netted}>Выполнены</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="label">С даты (создание):</label>
-                        <input
-                            type="date"
-                            className="input"
-                            value={dateFrom}
-                            onChange={(e) => setDateFrom(e.target.value)}
-                            style={{ marginLeft: '8px', width: 'auto' }}
-                        />
-                    </div>
-                    <div>
-                        <label className="label">По дату:</label>
-                        <input
-                            type="date"
-                            className="input"
-                            value={dateTo}
-                            onChange={(e) => setDateTo(e.target.value)}
-                            style={{ marginLeft: '8px', width: 'auto' }}
-                        />
-                    </div>
-                    {(dateFrom || dateTo) && (
-                        <button type="button" className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo('') }}>
-                            Сбросить даты
-                        </button>
-                    )}
-                </div>
-                <p style={{ fontSize: '13px', color: '#555', marginBottom: '16px', maxWidth: '720px' }}>
-                    Данные из API: в таблице по умолчанию показан <strong>остаток</strong> по обязательству (
-                    <code>remaining_amount</code>
-                    ). После клиринга он может стать <strong>0 SOL</strong>, при этом исходная сумма была ненулевой — смотрите колонку «Сумма» (остаток / номинал) и ответ в консоли браузера при загрузке страницы.
-                </p>
-
-                {loading ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>
-                        <ClipLoader size={56} speedMultiplier={0.7} />
-                        <p>Загрузка...</p>
-                    </div>
-                ) : filteredObligations.length === 0 ? (
-                    <p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
-                        Позиции не найдены
-                    </p>
+    const renderObligationsTable = (title: string, obligations: Obligation[], emptyText: string) => {
+        const isCreditorView = viewMode === 'creditor'
+        return (
+            <div style={{ marginTop: '24px' }}>
+                <h2 style={{ color: '#333', marginBottom: '12px' }}>{title}</h2>
+                {obligations.length === 0 ? (
+                    <p style={{ color: '#666', padding: '16px 0' }}>{emptyText}</p>
                 ) : (
                     <table className="table">
                         <thead>
                             <tr>
-                                <th>Дебитор</th>
-                                <th>Кредитор</th>
+                                <th>{isCreditorView ? 'Дебитор' : 'Кредитор'}</th>
                                 <th>Сумма (остаток / номинал)</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
@@ -308,21 +230,19 @@ export default function ObligationsPage() {
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredObligations.map((obligation) => (
+                            {obligations.map((obligation) => (
                                 <tr key={obligation.pda.toBase58()}>
                                     <td>
-                                        <Link to={`/participant/${obligation.from}`} style={{ color: '#667eea' }}>
-                                            {obligation.from.toBase58().slice(0, 8)}...
-                                        </Link>
-                                    </td>
-                                    <td>
-                                        <Link to={`/participant/${obligation.to}`} style={{ color: '#667eea' }}>
-                                            {obligation.to.toBase58().slice(0, 8)}...
+                                        <Link
+                                            to={`/participant/${isCreditorView ? obligation.from : obligation.to}`}
+                                            style={{ color: '#667eea' }}
+                                        >
+                                            {(isCreditorView ? obligation.from : obligation.to).toBase58().slice(0, 8)}...
                                         </Link>
                                     </td>
                                     <td>
                                         {obligation.originalAmount != null &&
-                                        obligation.originalAmount !== obligation.amount ? (
+                                            obligation.originalAmount !== obligation.amount ? (
                                             <span title="Остаток после неттинга / исходный номинал">
                                                 {(obligation.amount / 1e9).toFixed(4)} / {(obligation.originalAmount / 1e9).toFixed(4)} SOL
                                             </span>
@@ -339,7 +259,7 @@ export default function ObligationsPage() {
                                     </td>
                                     <td>{formatDate(obligation.timestamp)}</td>
                                     <td>
-                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey) && (
+                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey!) && (
                                             <button
                                                 className="btn btn-primary"
                                                 style={{ padding: '6px 12px', fontSize: '14px' }}
@@ -349,7 +269,7 @@ export default function ObligationsPage() {
                                                 {actionLoading === obligation ? 'Подтверждение...' : 'Подтвердить'}
                                             </button>
                                         )}
-                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey) && (
+                                        {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey!) && (
                                             <button
                                                 className="btn btn-danger"
                                                 style={{ padding: '6px 12px', fontSize: '14px', marginLeft: '8px' }}
@@ -384,6 +304,120 @@ export default function ObligationsPage() {
                             ))}
                         </tbody>
                     </table>
+                )}
+            </div>
+        )
+    }
+
+    // Если кошелёк не подключён — возвращаем пустую страницу
+    if (!publicKey) {
+        return <h1 style={{ color: '#eee' }}>Доступно только авторизованным пользователям</h1>
+    }
+
+    return (
+        <div>
+            <div className="card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    <h1 style={{ color: '#333' }}>Клиринговые позиции</h1>
+                    <Link to="/obligations/create" className="btn btn-primary">
+                        Создать позицию
+                    </Link>
+                </div>
+
+                <div
+                    style={{
+                        marginBottom: '16px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '16px',
+                        flexWrap: 'wrap',
+                    }}
+                >
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                            type="button"
+                            className={viewMode === 'creditor' ? 'btn btn-primary' : 'btn btn-secondary'}
+                            onClick={() => setViewMode('creditor')}
+                        >
+                            Я кредитор
+                        </button>
+                        <button
+                            type="button"
+                            className={viewMode === 'debitor' ? 'btn btn-primary' : 'btn btn-secondary'}
+                            onClick={() => setViewMode('debitor')}
+                        >
+                            Я дебитор
+                        </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end' }}>
+                        <div>
+                            <label className="label">Фильтр по статусу:</label>
+                            <select
+                                className="input"
+                                value={filter}
+                                onChange={(e) => setFilter(parseInt(e.target.value))}
+                                style={{ width: 'auto', display: 'inline-block', marginLeft: '8px' }}
+                            >
+                                <option value={ObligationStatus.All}>Все</option>
+                                <option value={ObligationStatus.Created}>Ожидают подтверждения</option>
+                                <option value={ObligationStatus.Confirmed}>Подтверждены</option>
+                                <option value={ObligationStatus.PartiallyNetted}>Частично погашены</option>
+                                <option value={ObligationStatus.Netted}>Выполнены</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="label">С даты (создание):</label>
+                            <input
+                                type="date"
+                                className="input"
+                                value={dateFrom}
+                                onChange={(e) => setDateFrom(e.target.value)}
+                                style={{ marginLeft: '8px', width: 'auto' }}
+                            />
+                        </div>
+                        <div>
+                            <label className="label">По дату:</label>
+                            <input
+                                type="date"
+                                className="input"
+                                value={dateTo}
+                                onChange={(e) => setDateTo(e.target.value)}
+                                style={{ marginLeft: '8px', width: 'auto' }}
+                            />
+                        </div>
+                        {(dateFrom || dateTo) && (
+                            <button type="button" className="btn btn-secondary" onClick={() => { setDateFrom(''); setDateTo('') }}>
+                                Сбросить даты
+                            </button>
+                        )}
+                    </div>
+                </div>
+                <p style={{ fontSize: '13px', color: '#555', marginBottom: '16px', maxWidth: '720px' }}>
+                    Данные из API: в таблице по умолчанию показан <strong>остаток</strong> по обязательству (
+                    <code>remaining_amount</code>
+                    ). После клиринга он может стать <strong>0 SOL</strong>, при этом исходная сумма была ненулевой — смотрите колонку «Сумма» (остаток / номинал) и ответ в консоли браузера при загрузке страницы.
+                </p>
+
+                {loading ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>
+                        <ClipLoader size={56} speedMultiplier={0.7} />
+                        <p>Загрузка...</p>
+                    </div>
+                ) : filteredObligations.length === 0 ? (
+                    <p style={{ color: '#666', textAlign: 'center', padding: '32px' }}>
+                        Позиции не найдены
+                    </p>
+                ) : (
+                    <>
+                        {renderObligationsTable(
+                            viewMode === 'creditor' ? 'Я кредитор' : 'Я дебитор',
+                            activeObligations,
+                            viewMode === 'creditor'
+                                ? 'Нет обязательств, где вы кредитор'
+                                : 'Нет обязательств, где вы дебитор'
+                        )}
+                    </>
                 )}
             </div>
         </div>

@@ -72,7 +72,11 @@ async fn main() -> std::io::Result<()> {
     let used_nonces = Arc::new(tokio::sync::RwLock::new(HashMap::<String, i64>::new()));
     let metrics = Arc::new(handlers::AppMetrics::new());
     let frontend_origin = env::var("FRONTEND_ORIGIN").ok();
-    tokio::spawn(indexer::index_loop(solana_ws_url, db_pool.clone()));
+    tokio::spawn(indexer::index_loop(
+        solana_ws_url,
+        solana_rpc_url.clone(),
+        db_pool.clone(),
+    ));
 
     tracing::info!("🚀 Starting API server on port {}", port);
     tracing::info!("🤖 Solana RPC URL: {}", solana_rpc_url);
@@ -117,6 +121,11 @@ async fn main() -> std::io::Result<()> {
                     .route(
                         "/obligations/{wallet}",
                         web::get().to(handlers::get_obligations_by_wallet),
+                    )
+                    .route("/participants", web::get().to(handlers::get_all_participants))
+                    .route(
+                        "/participants/{authority}",
+                        web::get().to(handlers::get_participant_by_authority),
                     )
                     .route(
                         "/clearing/audit/last",

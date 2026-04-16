@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
-import { getClearingState, getUserRole, useProgram } from '../api'
+import { getClearingState, getParticipant, getParticipantPda, getUserRole, useProgram } from '../api'
 import { UserType, UserTypeToString } from '../interfaces'
 
 interface LayoutProps {
@@ -17,6 +17,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
     const program = useProgram();
     const [nextSessionAt, setNextSessionAt] = useState<number | null>(null);
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
+    const [userName, setUserName] = useState<string | null>(null);
 
     // Обновляем роль при изменении кошелька
     useEffect(() => {
@@ -69,6 +70,32 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
             clearInterval(refreshId);
         };
     }, [program]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadUserName = async () => {
+            if (!publicKey || !program) {
+                setUserName(null);
+                return;
+            }
+            try {
+                const participantPda = getParticipantPda(program.programId, publicKey);
+                const participant = await getParticipant(program, participantPda);
+                if (!cancelled) setUserName(participant?.name ?? null);
+            } catch (error) {
+                console.error('Error loading participant name:', error);
+                if (!cancelled) {
+                    setUserName(null);
+                }
+            }
+        };
+
+        loadUserName();
+        return () => {
+            cancelled = true;
+        };
+    }, [publicKey, program]);
 
     useEffect(() => {
         if (!nextSessionAt) return;
@@ -238,9 +265,11 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         Not Connected
                                     </span>
                             }
-                            <span style={{ fontSize: '12px', color: '#666' }}>
-                                Роль: {UserTypeToString(userType)}
-                            </span>
+                            {userName && (
+                                <span style={{ fontSize: '14px', color: '#666' }}>
+                                    Имя: {userName}
+                                </span>
+                            )}
                             <span
                                 title="Время до следующей клиринговой сессии"
                                 style={{

@@ -6,7 +6,7 @@ import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
 import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { sha256 } from 'js-sha256';
-import { Bill, ClearingAuditResult, ClearingSessionSummary, Obligation, ObligationStatus, Participant, SystemInfo, UserType } from './interfaces';
+import { Bill, ClearingAuditResult, ClearingSessionSummary, Obligation, ObligationStatus, Participant, ParticipantDirectoryEntry, SystemInfo, UserType } from './interfaces';
 
 type BNLike = { toNumber: () => number };
 type AnchorEnum = Record<string, unknown>;
@@ -20,6 +20,12 @@ type DbObligationApiItem = {
     created_at: number;
     updated_at: number;
     closed_at: number | null;
+};
+
+type DbParticipantApiItem = {
+    pda: string;
+    authority: string;
+    user_name: string;
 };
 
 export type MerkleLeafPayload = {
@@ -1172,6 +1178,36 @@ export async function getLastClearingAudit(
         throw new Error(res.data.error || "Failed to load clearing audit");
     }
     return res.data.data;
+}
+
+export async function getParticipantsFromDb(apiUrl: string): Promise<ParticipantDirectoryEntry[]> {
+    const res = await axios.get<{ success: boolean; data?: DbParticipantApiItem[]; error?: string }>(
+        `${apiUrl}/participants`
+    );
+    if (!res.data.success || !res.data.data) {
+        throw new Error(res.data.error || "Failed to load participants");
+    }
+    return res.data.data;
+}
+
+export async function getParticipantFromDb(
+    apiUrl: string,
+    authority: PublicKey
+): Promise<ParticipantDirectoryEntry | null> {
+    try {
+        const res = await axios.get<{ success: boolean; data?: DbParticipantApiItem; error?: string }>(
+            `${apiUrl}/participants/${authority.toBase58()}`
+        );
+        if (!res.data.success || !res.data.data) {
+            throw new Error(res.data.error || "Failed to load participant");
+        }
+        return res.data.data;
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 404) {
+            return null;
+        }
+        throw error;
+    }
 }
 
 export async function listClearingSessions(apiUrl: string): Promise<ClearingSessionSummary[]> {

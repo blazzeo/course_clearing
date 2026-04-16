@@ -45,6 +45,12 @@ export interface Participant {
     bump: number,
 }
 
+export interface ParticipantDirectoryEntry {
+    pda: string;
+    authority: string;
+    user_name: string;
+}
+
 export interface SystemInfo {
     total_participants: number
     total_sessions: number

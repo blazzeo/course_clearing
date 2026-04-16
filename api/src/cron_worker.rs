@@ -1,6 +1,5 @@
-use crate::ledger_engine::netting_clearing;
-use crate::models::RawSettlement;
 use crate::flow_solver::{solve_min_cost_flow, ExternalSettlement, InternalNetting};
+use crate::models::RawSettlement;
 use anchor_lang::AccountDeserialize;
 use chrono::Utc;
 use clearing_solana::{ClearingState, Obligation, ObligationPool, ObligationStatus};
@@ -586,7 +585,11 @@ impl CronWorker {
             step: "mcmf_solved".to_string(),
             detail: format!(
                 "objective={} total_cost={} total_flow={} positive_net={} unmet_demand={}",
-                sol.objective, sol.total_cost, sol.total_flow, sol.total_positive_net, sol.unmet_demand
+                sol.objective,
+                sol.total_cost,
+                sol.total_flow,
+                sol.total_positive_net,
+                sol.unmet_demand
             ),
             timestamp: Utc::now().timestamp(),
         });

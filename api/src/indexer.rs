@@ -1,13 +1,16 @@
-use anchor_lang::{AnchorDeserialize, Discriminator};
+use anchor_lang::{AccountDeserialize, AnchorDeserialize, Discriminator};
 use base64::{engine::general_purpose, Engine as _};
 use clearing_solana::{
     ObligationCancelled, ObligationConfirmed, ObligationCreated, ObligationDeclined,
-    ObligationNetted, ObligationPartiallyNetted, ParticipantRegistered, ID as PROGRAM_ID,
+    ObligationNetted, ObligationPartiallyNetted, Participant as OnchainParticipant,
+    ParticipantRegistered, ID as PROGRAM_ID,
 };
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,
+    nonblocking::rpc_client::RpcClient,
     rpc_config::{CommitmentConfig, RpcTransactionLogsConfig, RpcTransactionLogsFilter},
 };
+use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
 use tokio::time::{sleep, Duration};
 use tokio_stream::StreamExt;
@@ -66,9 +69,40 @@ fn parse_events(logs: &[String]) -> Vec<IndexedEvent> {
         .collect()
 }
 
-async fn persist_event(pool: &PgPool, signature: &str, event: IndexedEvent) -> anyhow::Result<()> {
+async fn fetch_participant_account(
+    rpc_client: &RpcClient,
+    participant_pda: &str,
+) -> anyhow::Result<OnchainParticipant> {
+    let pubkey: Pubkey = participant_pda.parse()?;
+    let mut last_error = None;
+
+    for _ in 0..30 {
+        match rpc_client.get_account_data(&pubkey).await {
+            Ok(data) => {
+                let mut slice: &[u8] = &data;
+                return Ok(OnchainParticipant::try_deserialize(&mut slice)?);
+            }
+            Err(err) => {
+                last_error = Some(err);
+                sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    Err(last_error
+        .map(anyhow::Error::from)
+        .unwrap_or_else(|| anyhow::anyhow!("participant account unavailable after retries")))
+}
+
+async fn persist_event(
+    pool: &PgPool,
+    rpc_client: &RpcClient,
+    signature: &str,
+    event: IndexedEvent,
+) -> anyhow::Result<()> {
     match event {
         IndexedEvent::ParticipantRegistered(e) => {
+            let participant_pda = e.participant.to_string();
             sqlx::query(
                 r#"
                 INSERT INTO events (tx_signature, event_type, data, created_at)
@@ -77,10 +111,35 @@ async fn persist_event(pool: &PgPool, signature: &str, event: IndexedEvent) -> a
                 "#,
             )
             .bind(signature)
-            .bind(e.participant.to_string())
+            .bind(&participant_pda)
             .bind(e.timestamp)
             .execute(pool)
             .await?;
+
+            match fetch_participant_account(rpc_client, &participant_pda).await {
+                Ok(participant) => {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO participants (pda, authority, user_name)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (pda) DO UPDATE SET
+                            authority = EXCLUDED.authority,
+                            user_name = EXCLUDED.user_name
+                        "#,
+                    )
+                    .bind(&participant_pda)
+                    .bind(participant.authority.to_string())
+                    .bind(participant.name)
+                    .execute(pool)
+                    .await?;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "ParticipantRegistered observed but participant account still unavailable: pda={}, err={err:?}",
+                        participant_pda
+                    );
+                }
+            }
         }
         IndexedEvent::ObligationCreated(e) => {
             sqlx::query(
@@ -172,7 +231,8 @@ async fn persist_event(pool: &PgPool, signature: &str, event: IndexedEvent) -> a
     Ok(())
 }
 
-pub async fn index_loop(ws_url: String, pool: PgPool) -> anyhow::Result<()> {
+pub async fn index_loop(ws_url: String, rpc_url: String, pool: PgPool) -> anyhow::Result<()> {
+    let rpc_client = RpcClient::new(rpc_url);
     loop {
         let pubsub_client = match PubsubClient::new(&ws_url).await {
             Ok(c) => c,
@@ -204,10 +264,13 @@ pub async fn index_loop(ws_url: String, pool: PgPool) -> anyhow::Result<()> {
         tracing::info!("Indexer subscribed to program logs");
 
         while let Some(msg) = stream.next().await {
+            if msg.value.err.is_some() {
+                continue;
+            }
             let signature = msg.value.signature.clone();
             let events = parse_events(&msg.value.logs);
             for event in events {
-                if let Err(err) = persist_event(&pool, &signature, event).await {
+                if let Err(err) = persist_event(&pool, &rpc_client, &signature, event).await {
                     tracing::error!("Indexer persist failed for {signature}: {err:?}");
                 }
             }

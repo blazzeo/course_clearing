@@ -1,9 +1,11 @@
 import { useWallet } from '@solana/wallet-adapter-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
-import { getParticipantByUserName, getPool, getPoolPda, registerObligation, useProgram } from '../api'
+import { getParticipantByUserName, getParticipantsFromDb, getPool, getPoolPda, registerObligation, useProgram } from '../api'
 import { PublicKey } from '@solana/web3.js'
+import { ParticipantDirectoryEntry } from '../interfaces'
+import { API_URL } from '../main'
 
 export default function CreateObligation() {
     const { publicKey } = useWallet()
@@ -14,6 +16,36 @@ export default function CreateObligation() {
     const [amount, setAmount] = useState('')
     const [loading, setLoading] = useState(false)
     const [lookupLoading, setLookupLoading] = useState(false)
+    const [participants, setParticipants] = useState<ParticipantDirectoryEntry[]>([])
+    const [participantsLoading, setParticipantsLoading] = useState(false)
+
+    useEffect(() => {
+        const loadParticipants = async () => {
+            try {
+                setParticipantsLoading(true)
+                const data = await getParticipantsFromDb(API_URL)
+                setParticipants(data)
+            } catch (error) {
+                console.error('Error loading participants from DB:', error)
+            } finally {
+                setParticipantsLoading(false)
+            }
+        }
+
+        loadParticipants()
+    }, [])
+
+    const availableParticipants = useMemo(() => {
+        if (!publicKey) return participants
+        const self = publicKey.toBase58()
+        return participants.filter((participant) => participant.authority !== self)
+    }, [participants, publicKey])
+
+    const handleSelectParticipant = (authority: string) => {
+        const selected = availableParticipants.find((participant) => participant.authority === authority)
+        setCounterparty(authority)
+        setCounterpartyName(selected?.user_name ?? '')
+    }
 
     const handleLookupByName = async () => {
         if (!program) {
@@ -130,27 +162,57 @@ export default function CreateObligation() {
                 )}
 
                 <form onSubmit={handleSubmit}>
-                    <label className="label">
-                        Поиск контрагента по имени
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'start', gap: '8px', marginBottom: '12px' }}>
-                        <input
-                            type="text"
-                            className="input"
-                            value={counterpartyName}
-                            onChange={(e) => setCounterpartyName(e.target.value)}
-                            placeholder="Например: ivanov"
-                            style={{ flex: 1 }}
-                        />
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={handleLookupByName}
-                            disabled={lookupLoading || !program}
-                        >
-                            {lookupLoading ? 'Поиск...' : 'Найти'}
-                        </button>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <label className="label">
+                                Выбрать пользователя из БД
+                            </label>
+                            <select
+                                className="input"
+                                value={counterparty}
+                                onChange={(e) => handleSelectParticipant(e.target.value)}
+                                disabled={participantsLoading}
+                                style={{ width: '35vw' }}
+                            >
+                                <option value="">
+                                    {participantsLoading ? 'Загрузка пользователей...' : 'Выберите пользователя'}
+                                </option>
+                                {availableParticipants.map((participant) => (
+                                    <option key={participant.pda} value={participant.authority}>
+                                        {participant.user_name} ({participant.authority.slice(0, 8)}...)
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        ИЛИ
+
+                        <div>
+                            <label className="label">
+                                Поиск контрагента по имени
+                            </label>
+                            <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
+                                <input
+                                    type="text"
+                                    className="input"
+                                    value={counterpartyName}
+                                    onChange={(e) => setCounterpartyName(e.target.value)}
+                                    placeholder="Например: ivanov"
+                                    style={{ flex: 1, width: '35vw' }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={handleLookupByName}
+                                    disabled={lookupLoading || !program}
+                                >
+                                    {lookupLoading ? 'Поиск...' : 'Найти'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
+
 
                     <label className="label">
                         Адрес контрагента (Pubkey)
@@ -164,19 +226,71 @@ export default function CreateObligation() {
                         required
                     />
 
-                    <label className="label">
-                        Сумма (SOL)
-                    </label>
-                    <input
-                        type="number"
-                        step="0.000000001"
-                        className="input"
-                        value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        placeholder="0.0"
-                        required
-                        min="0"
-                    />
+                    <div style={{ marginTop: '12px', marginBottom: '12px' }}>
+                        <label className="label">Схема обязательства</label>
+                        <div
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                flexWrap: 'wrap',
+                                padding: '12px',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                background: '#f8fafc',
+                            }}
+                        >
+                            <div
+                                style={{
+                                    minWidth: '220px',
+                                    maxWidth: '320px',
+                                    padding: '8px 10px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #cbd5e1',
+                                    background: '#fff',
+                                    fontFamily: 'monospace',
+                                    fontSize: '13px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                }}
+                                title={counterparty || 'other participant'}
+                            >
+                                {counterparty || 'other participant'}
+                            </div>
+                            <span style={{ color: '#64748b', fontWeight: 600 }}>--</span>
+                            <input
+                                type="number"
+                                step="0.000000001"
+                                className="input"
+                                value={amount}
+                                onChange={(e) => setAmount(e.target.value)}
+                                placeholder="SOL amount"
+                                required
+                                min="0"
+                                style={{ width: '160px', margin: 0 }}
+                            />
+                            <span style={{ color: '#64748b', fontWeight: 600 }}>--&gt;</span>
+                            <div
+                                style={{
+                                    minWidth: '220px',
+                                    maxWidth: '320px',
+                                    padding: '8px 10px',
+                                    borderRadius: '6px',
+                                    border: '1px solid #cbd5e1',
+                                    background: '#fff',
+                                    fontFamily: 'monospace',
+                                    fontSize: '13px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                }}
+                                title={publicKey?.toBase58() || 'current participant'}
+                            >
+                                {publicKey?.toBase58() || 'current participant'}
+                            </div>
+                        </div>
+                    </div>
 
                     <button
                         type="submit"
@@ -187,8 +301,8 @@ export default function CreateObligation() {
                         {loading ? 'Создание...' : 'Создать позицию'}
                     </button>
                 </form>
-            </div>
-        </div>
+            </div >
+        </div >
     )
 }
 
