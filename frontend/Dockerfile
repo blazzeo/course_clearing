@@ -19,5 +19,8 @@ RUN npm run build
 FROM nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx/docker-entrypoint-local-https.sh /docker-entrypoint-local-https.sh
 
-CMD ["nginx", "-g", "daemon off;"]
+RUN apk add --no-cache openssl && chmod +x /docker-entrypoint-local-https.sh
+
+CMD ["/docker-entrypoint-local-https.sh"]

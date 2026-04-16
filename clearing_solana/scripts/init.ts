@@ -16,8 +16,16 @@ const program = new Program(
 );
 
 const privateKey = process.env.ADMIN_PRIVATE_KEY;
+const fallbackPayer = (provider.wallet as anchor.Wallet & { payer?: Keypair }).payer;
+const adminKeypair = privateKey
+	? Keypair.fromSecretKey(bs58.decode(privateKey))
+	: fallbackPayer;
 
-const adminKeypair = Keypair.fromSecretKey(bs58.decode(privateKey));
+if (!adminKeypair) {
+	throw new Error(
+		"ADMIN_PRIVATE_KEY is not set and provider wallet has no payer. Set ADMIN_PRIVATE_KEY or configure ~/.config/solana/id.json"
+	);
+}
 
 function parseAirdropRecipients(): PublicKey[] {
 	const raw = process.env.AIRDROP_ADDRESSES ?? "";

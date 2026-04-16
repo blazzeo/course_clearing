@@ -27,3 +27,4 @@ test-ledger/
 *.pid
 
 .cursor
+.env.demo

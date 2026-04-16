@@ -7,7 +7,9 @@ WORKDIR /app
 COPY . .
 
 FROM base AS build
-RUN anchor build
+RUN export PATH="/root/.local/share/solana/install/active_release/bin:$PATH" && \
+    cargo install cargo-build-sbf --locked --force && \
+    anchor build
 
 FROM build AS deploy
 # Anchor migrate = deploy + execute migrations/deploy.ts

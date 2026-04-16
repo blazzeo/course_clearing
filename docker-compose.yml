@@ -33,7 +33,7 @@ services:
       SOLANA_WS_URL: ${SOLANA_WS_URL:-ws://localnet:8900}
       DATABASE_URL: ${DATABASE_URL:-postgres://clearing:clearing@postgres:5432/clearing}
       ADMIN_PUBKEY: ${ADMIN_PUBKEY}
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://localhost:3000}
       RUST_LOG: info
       PORT: 3001
     ports:
@@ -59,7 +59,8 @@ services:
         VITE_SOLANA_RPC_URL: /solana
     container_name: gateway
     ports:
-      - "3000:80"
+      - "3000:443"
+      - "3080:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
@@ -107,9 +108,27 @@ services:
         solana-keygen new --force --no-bip39-passphrase --silent -o /root/.config/solana/id.json;
       fi &&
       solana config set --url "$$SOLANA_URL" --keypair /root/.config/solana/id.json &&
+      until solana leader-schedule -u "$$SOLANA_URL" >/dev/null 2>&1; do
+        echo "Waiting for validator leader schedule...";
+        sleep 2;
+      done &&
       solana airdrop 200 "$(solana-keygen pubkey /root/.config/solana/id.json)" || true &&
-      anchor migrate --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json
+      anchor build &&
+      anchor deploy --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json -- --use-rpc &&
+      if [ -f migrations/deploy.ts ]; then
+        anchor migrate --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json;
+      else
+        echo "migrations/deploy.ts not found, skipping anchor migrate";
+      fi &&
+      npm install &&
+      ANCHOR_PROVIDER_URL="$$SOLANA_URL" ANCHOR_WALLET=/root/.config/solana/id.json npx ts-node scripts/init.ts &&
+      cp target/idl/clearing_solana.json /frontend-src/clearing_solana.json &&
+      cp target/types/clearing_solana.ts /frontend-src/clearing_solana.ts &&
+      echo "Anchor bootstrap completed (build/deploy/migrate/init + frontend IDL sync)."
       '
+    volumes:
+      - ./clearing_solana:/app
+      - ./frontend/src:/frontend-src
     depends_on:
       localnet:
         condition: service_healthy

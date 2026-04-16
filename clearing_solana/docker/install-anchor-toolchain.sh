@@ -5,7 +5,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  pkg-config build-essential libudev-dev libssl-dev git ca-certificates curl
+  pkg-config build-essential libudev-dev libssl-dev git ca-certificates curl nodejs npm
 rm -rf /var/lib/apt/lists/*
 
 SOLANA_VERSION="${SOLANA_VERSION:-1.18.26}"
@@ -20,6 +20,10 @@ export PATH="/root/.local/share/solana/install/active_release/bin:${PATH}"
 if ! cargo build-sbf --version >/dev/null 2>&1; then
   echo "[toolchain] cargo-build-sbf not found, installing from crates.io"
   cargo install cargo-build-sbf --locked --force
+fi
+
+if ! command -v yarn >/dev/null 2>&1; then
+  npm install -g yarn
 fi
 
 cargo install anchor-cli --version 0.32.1 --locked --force
