@@ -8,6 +8,7 @@ import AdminPanel from './pages/AdminPanel'
 import AdminObligationsPage from './pages/AdminObligationsPage'
 import AdminBillsPage from './pages/AdminBillsPage'
 import AdminSessionsPage from './pages/AdminSessionsPage'
+import UserSessionsPage from './pages/UserSessionsPage'
 import Profile from './pages/Profile'
 import AccessDenied from './pages/AccessDenied'
 
@@ -97,6 +98,16 @@ function App() {
                             userRole={userRole}
                         >
                             <Bills />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/sessions" element={
+                        <ProtectedRoute
+                            requiredRoles={[UserType.Counterparty]}
+                            resource="/sessions"
+                            requireWallet={true}
+                            userRole={userRole}
+                        >
+                            <UserSessionsPage />
                         </ProtectedRoute>
                     } />
 

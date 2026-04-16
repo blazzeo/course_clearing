@@ -155,6 +155,16 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                 >
                                     Мои счета
                                 </Link>
+                                <Link
+                                    to="/sessions"
+                                    style={{
+                                        textDecoration: 'none',
+                                        color: location.pathname === '/sessions' ? '#667eea' : '#666',
+                                        fontWeight: location.pathname === '/sessions' ? '600' : '400'
+                                    }}
+                                >
+                                    Мои сессии
+                                </Link>
                             </>
                         )}
 

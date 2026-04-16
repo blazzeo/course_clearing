@@ -131,9 +131,9 @@ export default function CreateObligation() {
 
                 <form onSubmit={handleSubmit}>
                     <label className="label">
-                        Поиск контрагента по user_name
+                        Поиск контрагента по имени
                     </label>
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'start', gap: '8px', marginBottom: '12px' }}>
                         <input
                             type="text"
                             className="input"
