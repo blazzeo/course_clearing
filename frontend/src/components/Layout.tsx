@@ -16,6 +16,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
     const location = useLocation();
     const program = useProgram();
     const [operationalDay, setOperationalDay] = useState<number | null>(null);
+    const [nextClearingDay, setNextClearingDay] = useState<number | null>(null);
     const [userName, setUserName] = useState<string | null>(null);
 
     // Обновляем роль при изменении кошелька
@@ -45,17 +46,22 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
         const loadOperationalDay = async () => {
             if (!program) {
                 setOperationalDay(null);
+                setNextClearingDay(null);
                 return;
             }
             try {
                 const state = await getClearingState(program);
                 if (!cancelled) {
                     setOperationalDay(state.operational_day);
+                    setNextClearingDay(
+                        state.last_clearing_operational_day + state.session_interval_time
+                    );
                 }
             } catch (error) {
                 console.error('Error loading operational day:', error);
                 if (!cancelled) {
                     setOperationalDay(null);
+                    setNextClearingDay(null);
                 }
             }
         };
@@ -98,6 +104,10 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
         if (operationalDay == null) return 'Сегодня: недоступно';
         return `Сегодня: ${new Date(operationalDay * 1000).toLocaleDateString('ru-RU')}`;
     }, [operationalDay]);
+    const nextClearingLabel = useMemo(() => {
+        if (nextClearingDay == null) return 'След. клиринг: недоступно';
+        return `След. клиринг: ${new Date(nextClearingDay * 1000).toLocaleDateString('ru-RU')}`;
+    }, [nextClearingDay]);
 
 
     return (
@@ -213,16 +223,29 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
 
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                            {userName && (
+                                <span style={{ fontSize: '14px', color: '#000', fontWeight: 'bold' }}>
+                                    Имя: {userName}
+                                </span>
+                            )}
                             {
                                 publicKey
                                     ?
                                     <span
                                         style={{
-                                            fontWeight: 'bold',
-                                            color: 'var(--success-color, #4caf50)',
+                                            marginTop: '4px',
+                                            fontSize: '12px',
+                                            color: '#334155',
+                                            background: 'linear-gradient(135deg, #eef2ff 0%, #e2e8f0 100%)',
+                                            border: '1px solid #cbd5e1',
+                                            borderRadius: '999px',
+                                            padding: '4px 10px',
+                                            fontWeight: 600,
+                                            letterSpacing: '0.2px',
+                                            boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
                                         }}
                                     >
-                                        Connected
+                                        {nextClearingLabel}
                                     </span>
                                     :
                                     <span
@@ -234,11 +257,6 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         Not Connected
                                     </span>
                             }
-                            {userName && (
-                                <span style={{ fontSize: '14px', color: '#666' }}>
-                                    Имя: {userName}
-                                </span>
-                            )}
                             <span
                                 title="Операционный день (из блокчейна)"
                                 style={{

@@ -211,7 +211,7 @@ export default function CreateObligation() {
 
                 <form onSubmit={handleSubmit}>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ flexWrap: 'wrap', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
                             <label className="label">
                                 Выбрать пользователя из списка
@@ -221,7 +221,7 @@ export default function CreateObligation() {
                                 value={counterparty}
                                 onChange={(e) => handleSelectParticipant(e.target.value)}
                                 disabled={participantsLoading}
-                                style={{ width: '35vw' }}
+                                style={{ flex: '1 1 550px', minWidth: '350px' }}
                             >
                                 <option value="">
                                     {participantsLoading ? 'Загрузка пользователей...' : 'Выберите пользователя'}
@@ -234,8 +234,6 @@ export default function CreateObligation() {
                             </select>
                         </div>
 
-                        ИЛИ
-
                         <div>
                             <label className="label">
                                 Поиск контрагента по имени
@@ -247,7 +245,7 @@ export default function CreateObligation() {
                                     value={counterpartyName}
                                     onChange={(e) => setCounterpartyName(e.target.value)}
                                     placeholder="Например: ivanov"
-                                    style={{ flex: 1, width: '35vw' }}
+                                    style={{ flex: '1 1 550px', minWidth: '350px' }}
                                 />
                                 <button
                                     type="button"
@@ -294,7 +292,7 @@ export default function CreateObligation() {
                                 <div
                                     style={{
                                         minWidth: '220px',
-                                        maxWidth: '300px',
+                                        maxWidth: '270px',
                                         padding: '12px',
                                         borderRadius: '6px',
                                         border: '1px solid #cbd5e1',
@@ -307,31 +305,15 @@ export default function CreateObligation() {
                                     }}
                                     title={counterparty || 'Контрагент'}
                                 >
-                                    {counterparty || 'Контрагент'}
+                                    {counterparty || 'Введите Контрагента'}
                                 </div>
                             </div>
-                            <span style={{ color: '#64748b', fontWeight: 600 }}>--</span>
-                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                Сколько
-                                <input
-                                    type="number"
-                                    step="0.000000001"
-                                    className="input"
-                                    value={amount}
-                                    onChange={(e) => setAmount(e.target.value)}
-                                    placeholder="SOL amount"
-                                    required
-                                    min="0"
-                                    style={{ width: '140px', margin: 0 }}
-                                />
-                            </div>
-                            <span style={{ color: '#64748b', fontWeight: 600 }}>--&gt;</span>
                             <div>
                                 Кому
                                 <div
                                     style={{
                                         minWidth: '220px',
-                                        maxWidth: '300px',
+                                        maxWidth: '270px',
                                         padding: '12px',
                                         borderRadius: '6px',
                                         border: '1px solid #cbd5e1',
@@ -346,6 +328,20 @@ export default function CreateObligation() {
                                 >
                                     {publicKey?.toBase58() || 'current participant'}
                                 </div>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                Сколько
+                                <input
+                                    type="number"
+                                    step="0.000000001"
+                                    className="input"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    placeholder="SOL amount"
+                                    required
+                                    min="0"
+                                    style={{ width: '140px', margin: 0 }}
+                                />
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
                                 Операционный день расчёта (не раньше)

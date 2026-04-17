@@ -4,7 +4,8 @@ use crate::cron_worker::WorkerCommand;
 use clearing_solana::{
     ObligationCancelled, ObligationConfirmed, ObligationCreated, ObligationDeclined,
     ObligationNetted, ObligationPartiallyNetted, OperationalDayAdvanced,
-    Participant as OnchainParticipant, ParticipantRegistered, ID as PROGRAM_ID,
+    Participant as OnchainParticipant, ParticipantRegistered, SessionIntervalTimeUpdated,
+    ID as PROGRAM_ID,
 };
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,
@@ -27,6 +28,7 @@ enum IndexedEvent {
     ObligationNetted(ObligationNetted),
     ObligationPartiallyNetted(ObligationPartiallyNetted),
     OperationalDayAdvanced(OperationalDayAdvanced),
+    SessionIntervalTimeUpdated(SessionIntervalTimeUpdated),
 }
 
 fn extract_program_data(line: &str) -> Option<&str> {
@@ -64,6 +66,9 @@ fn decode_event_payload(data: &[u8]) -> Option<IndexedEvent> {
     }
     if let Some(e) = decode::<OperationalDayAdvanced>(data) {
         return Some(IndexedEvent::OperationalDayAdvanced(e));
+    }
+    if let Some(e) = decode::<SessionIntervalTimeUpdated>(data) {
+        return Some(IndexedEvent::SessionIntervalTimeUpdated(e));
     }
     None
 }
@@ -263,6 +268,34 @@ async fn persist_event(
             {
                 tracing::error!(
                     "Failed to notify worker about operational day close for tx {}: {}",
+                    signature,
+                    err
+                );
+            }
+        }
+        IndexedEvent::SessionIntervalTimeUpdated(e) => {
+            sqlx::query(
+                r#"
+                INSERT INTO events (tx_signature, event_type, data, created_at)
+                VALUES ($1, 'session_interval_time_updated',
+                    jsonb_build_object('admin', $2, 'old_interval_time', $3, 'new_interval_time', $4), $5)
+                ON CONFLICT (tx_signature) DO NOTHING
+                "#,
+            )
+            .bind(signature)
+            .bind(e.admin.to_string())
+            .bind(i64::try_from(e.old_interval_time).unwrap_or(i64::MAX))
+            .bind(i64::try_from(e.new_interval_time).unwrap_or(i64::MAX))
+            .bind(e.timestamp)
+            .execute(pool)
+            .await?;
+
+            if let Err(err) = sender
+                .send(WorkerCommand::IntervalUpdated(e.new_interval_time))
+                .await
+            {
+                tracing::error!(
+                    "Failed to notify worker about interval update for tx {}: {}",
                     signature,
                     err
                 );

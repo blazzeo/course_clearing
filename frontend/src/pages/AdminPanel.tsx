@@ -10,7 +10,6 @@ import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
 
 const SECONDS_IN_DAY = 24 * 3600;
-const FRESH_RESULT_TTL_SECONDS = 300;
 
 export interface SystemSetting {
     key: string,
@@ -131,8 +130,8 @@ export default function AdminPanel() {
         freeSlots: number;
     } | null>(null)
     const [poolStatsLoading, setPoolStatsLoading] = useState(false)
-    const [lastHandledResultTimestamp, setLastHandledResultTimestamp] = useState<number | null>(null)
     const [lastHandledResultId, setLastHandledResultId] = useState<string | null>(null)
+    const [lastHandledSessionId, setLastHandledSessionId] = useState<number | null>(null)
     const [lastAudit, setLastAudit] = useState<ClearingAuditResult | null>(null)
 
     const { publicKey, signMessage, signAllTransactions } = useWallet()
@@ -199,11 +198,6 @@ export default function AdminPanel() {
         return { message, signature: signatureBase64, nonce, timestamp };
     }
 
-    const isResultFresh = (ts: number): boolean => {
-        const now = Math.floor(Date.now() / 1000);
-        return Math.abs(now - ts) <= FRESH_RESULT_TTL_SECONDS;
-    }
-
     const executeOnChainAllocations = async (
         requestId: string,
         result: NonNullable<ClearingApiResponse["data"]>
@@ -212,6 +206,7 @@ export default function AdminPanel() {
             throw new Error("Кошелек не найден")
         }
         const { externalLeaves, internalLeaves, merkleRoot } = buildOnChainOperations(result);
+        const applicableInternalLeaves: typeof internalLeaves = [];
         logClearing(requestId, "on-chain execution started", {
             allocationsCount: externalLeaves.length,
             internalNettingsCount: internalLeaves.length,
@@ -229,7 +224,12 @@ export default function AdminPanel() {
                 status?.confirmed !== undefined ||
                 status?.partiallyNetted !== undefined;
             if (!isAllowed) {
-                throw new Error(`Obligation ${item.obligation} has incompatible status for createPosition`);
+                logClearing(requestId, "skip internal leaf: incompatible status", {
+                    obligation: item.obligation,
+                    requestedAmount: item.amount,
+                    status,
+                });
+                continue;
             }
             const onchainAmount = Number(acc.amount.toString());
             logClearing(requestId, "preflight obligation", {
@@ -239,25 +239,31 @@ export default function AdminPanel() {
                 status,
             });
             if (item.amount <= 0 || onchainAmount < item.amount) {
-                throw new Error(`Allocation invariant failed for obligation ${item.obligation}`);
+                logClearing(requestId, "skip internal leaf: amount mismatch", {
+                    obligation: item.obligation,
+                    requestedAmount: item.amount,
+                    onchainAmount,
+                });
+                continue;
             }
+            applicableInternalLeaves.push(item);
         }
         if (signAllTransactions) {
             const state = await getClearingState(program);
             const nextSessionId = state.total_sessions + 1;
             logClearing(requestId, "batch mode session prepared", { nextSessionId });
             const txs = [];
-            txs.push(await buildStartClearingSessionTx(program, externalLeaves.length + internalLeaves.length));
+            txs.push(await buildStartClearingSessionTx(program, externalLeaves.length + applicableInternalLeaves.length));
             txs.push(
                 await buildCommitSessionPlanTx(
                     program,
                     merkleRoot,
                     externalLeaves.length,
-                    internalLeaves.length,
+                    applicableInternalLeaves.length,
                     nextSessionId
                 )
             );
-            for (const item of internalLeaves) {
+            for (const item of applicableInternalLeaves) {
                 txs.push(
                     await buildApplyInternalNettingWithProofTx(
                         program,
@@ -433,26 +439,27 @@ export default function AdminPanel() {
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
-                logClearing(requestId, "skipped: stale timestamp", {
-                    resultTimestamp: result.timestamp,
-                    lastHandledResultTimestamp,
+            if (lastHandledSessionId !== null && result.session_id <= lastHandledSessionId) {
+                logClearing(requestId, "skipped: stale session_id", {
+                    resultSessionId: result.session_id,
+                    lastHandledSessionId,
                 });
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (!isResultFresh(result.timestamp)) {
-                logClearing(requestId, "skipped: result too old", {
-                    resultTimestamp: result.timestamp,
-                    now: Math.floor(Date.now() / 1000),
+            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
+            const onchainState = await getClearingState(program);
+            if (result.session_id <= onchainState.total_sessions) {
+                logClearing(requestId, "skipped: session already applied on-chain", {
+                    resultSessionId: result.session_id,
+                    onchainTotalSessions: onchainState.total_sessions,
                 });
-                toast.warn("Результат клиринга устарел. Запусти клиринг повторно.");
+                toast.info(`Сессия #${result.session_id} уже обработана, повторное выставление счетов пропущено.`);
                 return;
             }
-            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
             await executeOnChainAllocations(requestId, result);
-            setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
+            setLastHandledSessionId(result.session_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
                 processed: externalLeaves.length + internalLeaves.length,
@@ -489,10 +496,10 @@ export default function AdminPanel() {
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (lastHandledResultTimestamp !== null && result.timestamp <= lastHandledResultTimestamp) {
-                logClearing(requestId, "skipped: stale timestamp", {
-                    resultTimestamp: result.timestamp,
-                    lastHandledResultTimestamp,
+            if (lastHandledSessionId !== null && result.session_id <= lastHandledSessionId) {
+                logClearing(requestId, "skipped: stale session_id", {
+                    resultSessionId: result.session_id,
+                    lastHandledSessionId,
                 });
                 toast.info("Новой сессии не было");
                 return;
@@ -502,19 +509,19 @@ export default function AdminPanel() {
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (!isResultFresh(result.timestamp)) {
-                logClearing(requestId, "skipped: result too old", {
-                    resultTimestamp: result.timestamp,
-                    now: Math.floor(Date.now() / 1000),
+            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
+            const onchainState = await getClearingState(program);
+            if (result.session_id <= onchainState.total_sessions) {
+                logClearing(requestId, "skipped: session already applied on-chain", {
+                    resultSessionId: result.session_id,
+                    onchainTotalSessions: onchainState.total_sessions,
                 });
-                toast.info("Новой сессии не было");
+                toast.info(`Сессия #${result.session_id} уже обработана, повторное выставление счетов пропущено.`);
                 return;
             }
-
-            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
             await executeOnChainAllocations(requestId, result);
-            setLastHandledResultTimestamp(result.timestamp);
             setLastHandledResultId(result.result_id);
+            setLastHandledSessionId(result.session_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
                 processed: externalLeaves.length + internalLeaves.length,

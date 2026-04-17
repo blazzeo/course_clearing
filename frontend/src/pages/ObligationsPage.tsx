@@ -195,6 +195,11 @@ export default function ObligationsPage() {
         return new Date(tsMs).toLocaleString('ru-RU')
     }
 
+    const formatOperationalDay = (dayTs?: number) => {
+        if (!dayTs) return '-'
+        return new Date(dayTs * 1000).toLocaleDateString('ru-RU')
+    }
+
     const cancellationInfo = (obligation: Obligation) => {
         const fromRequested = obligation.fromCancel
         const toRequested = obligation.toCancel
@@ -226,6 +231,7 @@ export default function ObligationsPage() {
                                 <th>Сумма (остаток / номинал)</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
+                                <th>Опер. день расчёта</th>
                                 <th>Действия</th>
                             </tr>
                         </thead>
@@ -258,6 +264,7 @@ export default function ObligationsPage() {
                                         </span>
                                     </td>
                                     <td>{formatDate(obligation.timestamp)}</td>
+                                    <td>{formatOperationalDay(obligation.expectingOperationalDay)}</td>
                                     <td>
                                         {obligation.status === ObligationStatus.Created && obligation.from.equals(publicKey!) && (
                                             <button

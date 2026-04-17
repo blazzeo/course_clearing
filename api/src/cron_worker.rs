@@ -20,6 +20,7 @@ use tokio::{
 // Тип сообщения для воркера
 pub enum WorkerCommand {
     RunInstant(tokio::sync::oneshot::Sender<()>), // Канал для подтверждения завершения
+    IntervalUpdated(u64),
     OperationalDayClosed(i64),
 }
 
@@ -215,15 +216,20 @@ impl CronWorker {
             let cmd = self.receiver.recv().await;
             match cmd {
                 Some(WorkerCommand::RunInstant(respond_to)) => {
-                    if let Err(err) = self.perform_clearing().await {
+                    if let Err(err) = self.perform_clearing_manual().await {
                         tracing::error!("Manual clearing session failed: {err:?}");
                     }
                     let _ = respond_to.send(());
                 }
                 Some(WorkerCommand::OperationalDayClosed(closed_day)) => {
-                    if let Err(err) = self.perform_clearing_for_day(closed_day).await {
+                    if let Err(err) = self.perform_clearing_for_day(closed_day, true).await {
                         tracing::error!("Operational day clearing failed: {err:?}");
                     }
+                }
+                Some(WorkerCommand::IntervalUpdated(new_interval)) => {
+                    let mut s = self.state.write().await;
+                    s.session_interval_time = new_interval;
+                    tracing::info!("Worker session interval updated to {}s", new_interval);
                 }
                 None => break,
             }
@@ -516,7 +522,7 @@ impl CronWorker {
     }
 
     /// Инкапсулированная логика одной сессии (Single Responsibility)
-    async fn perform_clearing(&self) -> anyhow::Result<()> {
+    async fn perform_clearing_manual(&self) -> anyhow::Result<()> {
         let client = {
             let s = self.state.read().await;
             s.solana_client.clone()
@@ -524,10 +530,14 @@ impl CronWorker {
         let (pda, _bump) = clearing_solana::ClearingState::pda();
         let state: ClearingState =
             get_account(client.as_ref(), Pubkey::new_from_array(pda.to_bytes())).await?;
-        self.perform_clearing_for_day(state.operational_day).await
+        self.perform_clearing_for_day(state.operational_day, false).await
     }
 
-    async fn perform_clearing_for_day(&self, operational_day: i64) -> anyhow::Result<()> {
+    async fn perform_clearing_for_day(
+        &self,
+        operational_day: i64,
+        enforce_schedule: bool,
+    ) -> anyhow::Result<()> {
         let (sid, client, db_pool) = {
             let s = self.state.read().await;
             (s.session_id, s.solana_client.clone(), s.db_pool.clone())
@@ -543,7 +553,7 @@ impl CronWorker {
                 s.last_clearing_operational_day,
             )
         };
-        if !is_clearing_day {
+        if enforce_schedule && !is_clearing_day {
             tracing::info!(
                 "Skip clearing for closed operational day {} (last={}, interval={}s)",
                 closed_operational_day,

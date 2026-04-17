@@ -138,12 +138,34 @@ export async function registerObligation(
 
     const amt = new BN(amount)
 
-    return await (program.methods as any)
-        .registerObligation(from, to, amt, id, ts, new BN(expectingOperationalDay))
-        .accounts({
-            authority,
-        })
-        .rpc();
+    try {
+        // New program signature:
+        // register_obligation(from, to, amount, pool_id, timestamp, expecting_operational_day)
+        return await (program.methods as any)
+            .registerObligation(from, to, amt, id, ts, new BN(expectingOperationalDay))
+            .accounts({
+                authority,
+            })
+            .rpc();
+    } catch (error) {
+        const msg = String(error ?? '');
+        const tooManyArgs =
+            msg.includes('provided too many arguments') ||
+            msg.includes('expecting: from,to,amount,poolId,timestamp');
+
+        if (!tooManyArgs) {
+            throw error;
+        }
+
+        // Backward-compatible fallback for old deployed programs/IDL
+        // that still have 5 args (without expecting_operational_day).
+        return await (program.methods as any)
+            .registerObligation(from, to, amt, id, ts)
+            .accounts({
+                authority,
+            })
+            .rpc();
+    }
 }
 
 async function resolveObligationSeedData(
