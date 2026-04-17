@@ -7,6 +7,22 @@ import { PublicKey } from '@solana/web3.js'
 import { ParticipantDirectoryEntry } from '../interfaces'
 import { API_URL } from '../main'
 
+const DAY_SECONDS = 24 * 60 * 60
+
+function formatDateInput(unixSeconds: number): string {
+    const date = new Date(unixSeconds * 1000)
+    const y = date.getUTCFullYear()
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const d = String(date.getUTCDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+}
+
+function parseDateInput(value: string): number {
+    const tsMs = Date.parse(`${value}T00:00:00Z`)
+    if (Number.isNaN(tsMs)) return 0
+    return Math.floor(tsMs / 1000 / DAY_SECONDS) * DAY_SECONDS
+}
+
 export default function CreateObligation() {
     const { publicKey } = useWallet()
     const program = useProgram()
@@ -14,8 +30,8 @@ export default function CreateObligation() {
     const [counterparty, setCounterparty] = useState('')
     const [counterpartyName, setCounterpartyName] = useState('')
     const [amount, setAmount] = useState('')
-    const [expectingClearingSession, setExpectingClearingSession] = useState('0')
-    const [minExpectingClearingSession, setMinExpectingClearingSession] = useState(1)
+    const [expectingOperationalDay, setExpectingOperationalDay] = useState('')
+    const [minExpectingClearingSession, setMinExpectingClearingSession] = useState(0)
     const [loading, setLoading] = useState(false)
     const [lookupLoading, setLookupLoading] = useState(false)
     const [participants, setParticipants] = useState<ParticipantDirectoryEntry[]>([])
@@ -42,12 +58,11 @@ export default function CreateObligation() {
             if (!program) return
             try {
                 const state = await getClearingState(program)
-                const minSession = state.total_sessions + 1
+                const minSession = state.operational_day
                 setMinExpectingClearingSession(minSession)
-                setExpectingClearingSession((current) => {
-                    const currentNum = Math.floor(Number(current) || 0)
-                    return String(Math.max(currentNum, minSession))
-                })
+                setExpectingOperationalDay((current) =>
+                    current || formatDateInput(minSession)
+                )
             } catch (error) {
                 console.error('Error loading clearing state:', error)
             }
@@ -145,9 +160,10 @@ export default function CreateObligation() {
             }
 
             // Creator is creditor (`to`) and will receive funds.
+            const selectedDayTs = parseDateInput(expectingOperationalDay)
             const expectedSession = Math.max(
                 minExpectingClearingSession,
-                Math.floor(Number(expectingClearingSession) || 0)
+                selectedDayTs
             )
             const tx = await registerObligation(
                 program,
@@ -332,15 +348,13 @@ export default function CreateObligation() {
                                 </div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                Когда
+                                Операционный день расчёта (не раньше)
                                 <input
-                                    type="number"
+                                    type="date"
                                     className="input"
-                                    value={expectingClearingSession}
-                                    onChange={(e) => setExpectingClearingSession(e.target.value)}
-                                    min={minExpectingClearingSession}
-                                    step="1"
-                                    placeholder={`Минимум: ${minExpectingClearingSession}`}
+                                    value={expectingOperationalDay}
+                                    onChange={(e) => setExpectingOperationalDay(e.target.value)}
+                                    min={formatDateInput(minExpectingClearingSession)}
                                     style={{ maxWidth: '180', margin: 0 }}
                                 />
                             </div>

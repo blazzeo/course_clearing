@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use sha2::{Digest, Sha256};
 
 declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
+const DAY_SECONDS_I64: i64 = 86_400;
 
 #[program]
 pub mod clearing_solana {
@@ -20,7 +21,8 @@ pub mod clearing_solana {
         state.total_participants = 0;
         state.total_sessions = 0;
         state.total_obligations = 0;
-        state.last_session_timestamp = clock.unix_timestamp;
+        state.operational_day = (clock.unix_timestamp / DAY_SECONDS_I64) * DAY_SECONDS_I64;
+        state.last_clearing_operational_day = state.operational_day;
         state.fee_rate_bps = 0;
         state.update_timestamp = clock.unix_timestamp;
 
@@ -54,7 +56,7 @@ pub mod clearing_solana {
         amount: u64,
         pool_id: u32,
         timestamp: i64,
-        expecting_clearing_session: u64,
+        expecting_operational_day: u64,
     ) -> Result<()> {
         let clock = Clock::get()?;
 
@@ -71,7 +73,7 @@ pub mod clearing_solana {
         obligation.to = to;
         obligation.amount = amount;
         obligation.timestamp = timestamp;
-        obligation.expecting_clearing_session = expecting_clearing_session;
+        obligation.expecting_operational_day = expecting_operational_day;
         obligation.session_id = None;
         obligation.bump = ctx.bumps.new_obligation;
         obligation.pool_id = pool_id;
@@ -101,7 +103,7 @@ pub mod clearing_solana {
             to,
             amount,
             timestamp: clock.unix_timestamp,
-            expecting_clearing_session,
+            expecting_operational_day,
         });
 
         Ok(())
@@ -315,7 +317,7 @@ pub mod clearing_solana {
 
         session.status = ClearingSessionStatus::Closed;
         session.closed_at = clock.unix_timestamp;
-        state.last_session_timestamp = clock.unix_timestamp;
+        state.last_clearing_operational_day = state.operational_day;
 
         Ok(())
     }
@@ -947,6 +949,28 @@ pub mod clearing_solana {
         Ok(())
     }
 
+    /// Method to move operational day to the next date (demo-only business date).
+    pub fn advance_operational_day(ctx: Context<AdvanceOperationalDay>) -> Result<()> {
+        let clock = Clock::get()?;
+        let state = &mut ctx.accounts.state;
+        let admin = &mut ctx.accounts.admin;
+
+        state.operational_day = state
+            .operational_day
+            .checked_add(DAY_SECONDS_I64)
+            .ok_or(CustomErrors::MathOverflow)?;
+        state.update_timestamp = clock.unix_timestamp;
+        admin.update_timestamp = clock.unix_timestamp;
+
+        emit!(OperationalDayAdvanced {
+            admin: admin.authority,
+            new_operational_day: state.operational_day,
+            timestamp: clock.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
     /// Method must be called by both participants of obligation.
     /// Each will interact only with his 'cancel flag'.
     /// When both flags are true - only then obligation is considered as 'Canceled'.
@@ -1233,7 +1257,7 @@ pub struct Obligation {
     pub to: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
-    pub expecting_clearing_session: u64,
+    pub expecting_operational_day: u64,
     pub session_id: Option<u64>, // default None (no session_id is linked at first)
     pub from_cancel: bool,
     pub to_cancel: bool,
@@ -1247,7 +1271,7 @@ impl Obligation {
         32 + // to
         8 + // amount
         8 + // timestamp
-        8 + // expecting_clearing_session
+        8 + // expecting_operational_day
         16 + // session_id
         1 + // from_cancel
         1 + // to_cancel
@@ -1461,7 +1485,8 @@ pub struct ClearingState {
     pub total_participants: u64,
     pub total_obligations: u64,
     pub session_interval_time: u64,
-    pub last_session_timestamp: i64,
+    pub last_clearing_operational_day: i64,
+    pub operational_day: i64,
     pub fee_rate_bps: u64,
     pub update_timestamp: i64,
     pub bump: u8,
@@ -1474,7 +1499,8 @@ impl ClearingState {
         8 + // total_participants
         8 + // total_obligations
         8 + // session_interval_time
-        8 + // last_session_timestamp
+        8 + // last_clearing_operational_day
+        8 + // operational_day
         8 + // fee_rate_bps
         8 + // update_timestamp
         1; // bump
@@ -1530,6 +1556,30 @@ pub enum UpdateFeeRateError {
 
 #[derive(Accounts)]
 pub struct UpdateSessionIntervalTime<'info> {
+    #[account(
+        mut,
+        seeds = [b"participant", authority.key().as_ref()],
+        bump,
+        constraint = admin.user_type == UserType::Admin @ UpdateFeeRateError::Forbidden,
+        constraint = admin.authority == authority.key() @ UpdateFeeRateError::Unauthorized
+    )]
+    pub admin: Account<'info, Participant>,
+
+    #[account(
+        mut,
+        seeds = [b"state"],
+        bump
+    )]
+    pub state: Account<'info, ClearingState>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AdvanceOperationalDay<'info> {
     #[account(
         mut,
         seeds = [b"participant", authority.key().as_ref()],
@@ -1684,7 +1734,7 @@ pub enum ConfirmObligationError {
 }
 
 #[derive(Accounts)]
-#[instruction(from: Pubkey, to: Pubkey, amount: u64, pool_id: u32, timestamp: i64, expecting_clearing_session: u64)]
+#[instruction(from: Pubkey, to: Pubkey, amount: u64, pool_id: u32, timestamp: i64, expecting_operational_day: u64)]
 pub struct RegisterObligation<'info> {
     #[account(
         mut,
@@ -2306,13 +2356,20 @@ pub struct SessionIntervalTimeUpdated {
 }
 
 #[event]
+pub struct OperationalDayAdvanced {
+    pub admin: Pubkey,
+    pub new_operational_day: i64,
+    pub timestamp: i64,
+}
+
+#[event]
 pub struct ObligationCreated {
     pub obligation: Pubkey,
     pub from: Pubkey,
     pub to: Pubkey,
     pub amount: u64,
     pub timestamp: i64,
-    pub expecting_clearing_session: u64,
+    pub expecting_operational_day: u64,
 }
 
 #[event]

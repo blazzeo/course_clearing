@@ -80,6 +80,7 @@ async fn main() -> std::io::Result<()> {
         solana_ws_url,
         solana_rpc_url.clone(),
         db_pool.clone(),
+        sender.clone(),
     ));
 
     tracing::info!("🚀 Starting API server on port {}", port);

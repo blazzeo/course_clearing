@@ -19,8 +19,8 @@ export interface Obligation {
     amount: number;
     /** Исходный номинал при создании (только для строк из БД). */
     originalAmount?: number;
-    /** Минимальный номер клиринговой сессии, в которую можно включать обязательство. */
-    expectingClearingSession?: number;
+    /** Минимальный операционный день (unix-start-of-day), с которого обязательство готово к расчету. */
+    expectingOperationalDay?: number;
     timestamp: number;
     sessionId: number;
     fromCancel: boolean;
@@ -59,7 +59,8 @@ export interface SystemInfo {
     total_obligations: number
     fee_rate_bps: number
     session_interval_time: number
-    last_session_timestamp: number
+    last_clearing_operational_day: number
+    operational_day: number
 }
 
 export enum NetPositionStatus {

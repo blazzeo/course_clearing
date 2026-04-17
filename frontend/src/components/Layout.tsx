@@ -15,8 +15,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
     const { publicKey } = useWallet();
     const location = useLocation();
     const program = useProgram();
-    const [nextSessionAt, setNextSessionAt] = useState<number | null>(null);
-    const [timeLeft, setTimeLeft] = useState<number | null>(null);
+    const [operationalDay, setOperationalDay] = useState<number | null>(null);
     const [userName, setUserName] = useState<string | null>(null);
 
     // Обновляем роль при изменении кошелька
@@ -43,28 +42,26 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
     useEffect(() => {
         let cancelled = false;
 
-        const loadSessionTimer = async () => {
+        const loadOperationalDay = async () => {
             if (!program) {
-                setNextSessionAt(null);
-                setTimeLeft(null);
+                setOperationalDay(null);
                 return;
             }
             try {
                 const state = await getClearingState(program);
-                const nextTs = state.last_session_timestamp + state.session_interval_time;
-                if (cancelled) return;
-                setNextSessionAt(nextTs);
-            } catch (error) {
-                console.error('Error loading clearing timer:', error);
                 if (!cancelled) {
-                    setNextSessionAt(null);
-                    setTimeLeft(null);
+                    setOperationalDay(state.operational_day);
+                }
+            } catch (error) {
+                console.error('Error loading operational day:', error);
+                if (!cancelled) {
+                    setOperationalDay(null);
                 }
             }
         };
 
-        loadSessionTimer();
-        const refreshId = setInterval(loadSessionTimer, 300_000);
+        loadOperationalDay();
+        const refreshId = setInterval(loadOperationalDay, 60_000);
         return () => {
             cancelled = true;
             clearInterval(refreshId);
@@ -97,28 +94,10 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
         };
     }, [publicKey, program]);
 
-    useEffect(() => {
-        if (!nextSessionAt) return;
-        const tick = () => {
-            const now = Math.floor(Date.now() / 1000);
-            setTimeLeft(Math.max(nextSessionAt - now, 0));
-        };
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [nextSessionAt]);
-
-    const timerLabel = useMemo(() => {
-        if (timeLeft == null) return 'Таймер сессии недоступен';
-        if (timeLeft === 0) return 'Сессия может начаться в любой момент';
-        const d = Math.floor(timeLeft / 86400);
-        const h = Math.floor((timeLeft % 86400) / 3600);
-        const m = Math.floor((timeLeft % 3600) / 60);
-        const s = timeLeft % 60;
-        if (d > 0) return `${d}д ${h}ч ${m}м ${s}с`;
-        if (h > 0) return `${h}ч ${m}м ${s}с`;
-        return `${m}м ${s}с`;
-    }, [timeLeft]);
+    const operationalDayLabel = useMemo(() => {
+        if (operationalDay == null) return 'Сегодня: недоступно';
+        return `Сегодня: ${new Date(operationalDay * 1000).toLocaleDateString('ru-RU')}`;
+    }, [operationalDay]);
 
 
     return (
@@ -261,7 +240,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                 </span>
                             )}
                             <span
-                                title="Время до следующей клиринговой сессии"
+                                title="Операционный день (из блокчейна)"
                                 style={{
                                     marginTop: '4px',
                                     fontSize: '12px',
@@ -275,7 +254,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
                                 }}
                             >
-                                {timerLabel}
+                                {operationalDayLabel}
                             </span>
                         </div>
                         <WalletMultiButton />

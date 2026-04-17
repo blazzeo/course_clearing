@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import axios from 'axios';
 import idl from "./clearing_solana.json"
 import type { ClearingSolana } from './clearing_solana';
-import { Connection, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
 import { sha256 } from 'js-sha256';
 import { Bill, ClearingAuditResult, ClearingSessionSummary, Obligation, ObligationStatus, Participant, ParticipantDirectoryEntry, SystemInfo, UserType } from './interfaces';
 
@@ -16,7 +16,7 @@ type DbObligationApiItem = {
     to_address: string;
     original_amount: number;
     remaining_amount: number;
-    expecting_clearing_session: number;
+    expecting_operational_day: number;
     status: string;
     created_at: number;
     updated_at: number;
@@ -128,7 +128,7 @@ export async function registerObligation(
     amount: number,
     pool_id: number,
     timestamp?: number,
-    expectingClearingSession: number = 0
+    expectingOperationalDay: number = 0
 ) {
     const authority = program.provider.publicKey;
 
@@ -139,7 +139,7 @@ export async function registerObligation(
     const amt = new BN(amount)
 
     return await (program.methods as any)
-        .registerObligation(from, to, amt, id, ts, new BN(expectingClearingSession))
+        .registerObligation(from, to, amt, id, ts, new BN(expectingOperationalDay))
         .accounts({
             authority,
         })
@@ -886,6 +886,30 @@ export async function updateSessionInterval(program: Program<ClearingSolana>, ne
         .rpc();
 }
 
+export async function advanceOperationalDay(program: Program<ClearingSolana>) {
+    const authority = program.provider.publicKey;
+    if (!authority) {
+        throw new Error('Wallet is not connected');
+    }
+    const participant = getParticipantPda(program.programId, authority);
+    const [statePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("state")],
+        program.programId
+    );
+    const discriminator = Buffer.from(sha256.array("global:advance_operational_day").slice(0, 8));
+    const ix = new TransactionInstruction({
+        programId: program.programId,
+        keys: [
+            { pubkey: participant, isSigner: false, isWritable: true },
+            { pubkey: statePda, isSigner: false, isWritable: true },
+            { pubkey: authority, isSigner: true, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: discriminator,
+    });
+    return await program.provider.sendAndConfirm(new Transaction().add(ix));
+}
+
 export async function getClearingState(program: Program<ClearingSolana>): Promise<SystemInfo> {
     const encoder = new TextEncoder()
 
@@ -894,15 +918,38 @@ export async function getClearingState(program: Program<ClearingSolana>): Promis
         program.programId
     )
 
-    const account = await program.account.clearingState.fetch(statePda)
+    const stateAccount = await program.provider.connection.getAccountInfo(statePda)
+    if (!stateAccount) {
+        throw new Error("State account not found");
+    }
+    const raw = Buffer.from(stateAccount.data);
+    const readU64 = (offset: number) => Number(raw.readBigUInt64LE(offset));
+    const readI64 = (offset: number) => Number(raw.readBigInt64LE(offset));
+    let offset = 8; // anchor discriminator
+    offset += 32; // authority
+    const superAdminTag = raw.readUInt8(offset);
+    offset += 1;
+    if (superAdminTag === 1) {
+        offset += 32;
+    }
+    const totalSessions = readU64(offset); offset += 8;
+    const totalParticipants = readU64(offset); offset += 8;
+    const totalObligations = readU64(offset); offset += 8;
+    const sessionIntervalTime = readU64(offset); offset += 8;
+    const lastClearingOperationalDay = readI64(offset); offset += 8;
+    const hasOperationalDay = raw.length >= offset + 16;
+    const operationalDay = hasOperationalDay ? readI64(offset) : lastClearingOperationalDay;
+    if (hasOperationalDay) offset += 8;
+    const feeRateBps = readU64(offset);
 
     const info: SystemInfo = {
-        total_obligations: account.totalObligations.toNumber(),
-        total_participants: account.totalParticipants.toNumber(),
-        total_sessions: account.totalSessions.toNumber(),
-        fee_rate_bps: account.feeRateBps.toNumber(),
-        session_interval_time: account.sessionIntervalTime.toNumber(),
-        last_session_timestamp: account.lastSessionTimestamp.toNumber(),
+        total_sessions: totalSessions,
+        total_participants: totalParticipants,
+        total_obligations: totalObligations,
+        session_interval_time: sessionIntervalTime,
+        last_clearing_operational_day: lastClearingOperationalDay,
+        operational_day: operationalDay,
+        fee_rate_bps: feeRateBps,
     }
 
     return info
@@ -1134,7 +1181,7 @@ export async function getObligationsByParticipantFromDb(
         to: new PublicKey(row.to_address),
         amount: row.remaining_amount,
         originalAmount: row.original_amount,
-        expectingClearingSession: row.expecting_clearing_session,
+        expectingOperationalDay: row.expecting_operational_day,
         timestamp: row.created_at,
         sessionId: 0,
         fromCancel: false,
@@ -1158,7 +1205,7 @@ export async function getAllObligationsFromDb(apiUrl: string): Promise<Obligatio
         to: new PublicKey(row.to_address),
         amount: row.remaining_amount,
         originalAmount: row.original_amount,
-        expectingClearingSession: row.expecting_clearing_session,
+        expectingOperationalDay: row.expecting_operational_day,
         timestamp: row.created_at,
         sessionId: 0,
         fromCancel: false,

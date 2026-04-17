@@ -3,7 +3,7 @@ use crate::{
     cron_worker::{WorkerCommand, WorkerState},
     models::*,
 };
-use actix_web::{http::StatusCode, post, web, HttpResponse, Responder};
+use actix_web::{web, HttpResponse, Responder};
 use chrono::Utc;
 use sqlx::PgPool;
 use std::{
@@ -123,37 +123,6 @@ pub async fn get_last_clearing_result(
     HttpResponse::Ok().json(ApiResponse::success(result))
 }
 
-#[post("/{new_interval_time}")]
-pub async fn update_intervaltime(
-    admin_pubkey: web::Data<String>,
-    payload: web::Json<AdminSignedRequest>,
-    new_interval_time: web::Path<u64>,
-    sender: web::Data<mpsc::Sender<WorkerCommand>>,
-    used_nonces: web::Data<Arc<tokio::sync::RwLock<HashMap<String, i64>>>>,
-    metrics: web::Data<Arc<AppMetrics>>,
-) -> impl Responder {
-    if let Err(err) =
-        verify_admin_request(admin_pubkey.get_ref(), &payload, used_nonces.as_ref()).await
-    {
-        metrics
-            .admin_auth_failures_total
-            .fetch_add(1, Ordering::Relaxed);
-        return HttpResponse::Unauthorized().json(ApiResponse::<String>::error(err.to_string()));
-    }
-
-    if let Err(e) = sender
-        .send(WorkerCommand::UpdateInterval(
-            new_interval_time.into_inner(),
-        ))
-        .await
-    {
-        tracing::error!("Couldn't update interval time: {e}");
-        return HttpResponse::new(StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    HttpResponse::Ok().finish()
-}
-
 pub async fn health() -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success("API is healthy"))
 }
@@ -205,7 +174,7 @@ pub async fn get_obligations_by_wallet(
             to_address,
             original_amount,
             remaining_amount,
-            expecting_clearing_session,
+            expecting_operational_day,
             status,
             created_at,
             updated_at,
@@ -240,7 +209,7 @@ pub async fn get_all_obligations(
             to_address,
             original_amount,
             remaining_amount,
-            expecting_clearing_session,
+            expecting_operational_day,
             status,
             created_at,
             updated_at,

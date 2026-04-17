@@ -15,13 +15,12 @@ use std::{
 use tokio::{
     sync::{mpsc, RwLock},
     task::JoinHandle,
-    time::Duration,
 };
 
 // Тип сообщения для воркера
 pub enum WorkerCommand {
     RunInstant(tokio::sync::oneshot::Sender<()>), // Канал для подтверждения завершения
-    UpdateInterval(u64),
+    OperationalDayClosed(i64),
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -72,7 +71,7 @@ pub struct InputObligationSnapshot {
     pub from: String,
     pub to: String,
     pub amount: u64,
-    pub expecting_clearing_session: u64,
+    pub expecting_operational_day: u64,
     pub status: String,
     pub timestamp: i64,
 }
@@ -121,8 +120,9 @@ struct AllocationContext {
 
 pub struct WorkerState {
     pub last_session_result: NettingSessionResult,
-    pub interval: u64,
+    pub session_interval_time: u64,
     pub session_id: u64,
+    pub last_clearing_operational_day: i64,
     pub solana_client: Arc<RpcClient>,
     pub db_pool: PgPool,
 }
@@ -165,8 +165,9 @@ impl WorkerState {
                 audit_log: vec![],
                 timestamp: chrono::Utc::now().timestamp(),
             },
-            interval: clearing_state.session_interval_time,
+            session_interval_time: clearing_state.session_interval_time,
             session_id: clearing_state.total_sessions,
+            last_clearing_operational_day: clearing_state.last_clearing_operational_day,
             solana_client: Arc::new(client),
             db_pool,
         })
@@ -210,38 +211,21 @@ impl CronWorker {
 
     /// Основной цикл с поддержкой мгновенных команд через канал
     async fn run(mut self) {
-        let mut ticker = {
-            let interval = self.state.read().await.interval;
-            tokio::time::interval(Duration::from_secs(interval))
-        };
-
         loop {
-            tokio::select! {
-                _ = ticker.tick() => {
+            let cmd = self.receiver.recv().await;
+            match cmd {
+                Some(WorkerCommand::RunInstant(respond_to)) => {
                     if let Err(err) = self.perform_clearing().await {
-                        tracing::error!("Scheduled clearing session failed: {err:?}");
+                        tracing::error!("Manual clearing session failed: {err:?}");
+                    }
+                    let _ = respond_to.send(());
+                }
+                Some(WorkerCommand::OperationalDayClosed(closed_day)) => {
+                    if let Err(err) = self.perform_clearing_for_day(closed_day).await {
+                        tracing::error!("Operational day clearing failed: {err:?}");
                     }
                 }
-
-                cmd = self.receiver.recv() => {
-                    match cmd {
-                        Some(WorkerCommand::RunInstant(respond_to)) => {
-                            if let Err(err) = self.perform_clearing().await {
-                                tracing::error!("Manual clearing session failed: {err:?}");
-                            }
-                            let _ = respond_to.send(());
-                        }
-
-                        Some(WorkerCommand::UpdateInterval(new_interval)) => {
-                            let mut s = self.state.write().await;
-                            s.interval = new_interval;
-
-                            ticker = tokio::time::interval(Duration::from_secs(new_interval));
-                        }
-
-                        None => break,
-                    }
-                }
+                None => break,
             }
         }
     }
@@ -518,7 +502,7 @@ impl CronWorker {
                 from: Pubkey::new_from_array(o.from.to_bytes()).to_string(),
                 to: Pubkey::new_from_array(o.to.to_bytes()).to_string(),
                 amount: o.amount,
-                expecting_clearing_session: o.expecting_clearing_session,
+                expecting_operational_day: o.expecting_operational_day,
                 status: status_to_string(o.status).to_string(),
                 timestamp: o.timestamp,
             })
@@ -533,13 +517,45 @@ impl CronWorker {
 
     /// Инкапсулированная логика одной сессии (Single Responsibility)
     async fn perform_clearing(&self) -> anyhow::Result<()> {
+        let client = {
+            let s = self.state.read().await;
+            s.solana_client.clone()
+        };
+        let (pda, _bump) = clearing_solana::ClearingState::pda();
+        let state: ClearingState =
+            get_account(client.as_ref(), Pubkey::new_from_array(pda.to_bytes())).await?;
+        self.perform_clearing_for_day(state.operational_day).await
+    }
+
+    async fn perform_clearing_for_day(&self, operational_day: i64) -> anyhow::Result<()> {
         let (sid, client, db_pool) = {
             let s = self.state.read().await;
             (s.session_id, s.solana_client.clone(), s.db_pool.clone())
         };
-        let target_session_id = sid + 1;
+        let closed_operational_day = operational_day.saturating_sub(86_400);
+        let (is_clearing_day, interval, last_day) = {
+            let s = self.state.read().await;
+            (
+                s.last_clearing_operational_day
+                    .saturating_add(i64::try_from(s.session_interval_time).unwrap_or(i64::MAX))
+                    == closed_operational_day,
+                s.session_interval_time,
+                s.last_clearing_operational_day,
+            )
+        };
+        if !is_clearing_day {
+            tracing::info!(
+                "Skip clearing for closed operational day {} (last={}, interval={}s)",
+                closed_operational_day,
+                last_day,
+                interval
+            );
+            return Ok(());
+        }
+
+        let target_operational_day = closed_operational_day;
         let all_obligations =
-            Self::collect_obligations(client.as_ref(), target_session_id).await;
+            Self::collect_obligations(client.as_ref(), target_operational_day).await;
 
         tracing::info!("[Clearing session № {} started!]", sid);
         let mut audit_log = vec![AuditLogEntry {
@@ -562,8 +578,8 @@ impl CronWorker {
                     ObligationStatus::Cancelled => "cancelled",
                 };
                 format!(
-                    "{}->{} amount={} status={} expecting_session={}",
-                    from, to, o.amount, status, o.expecting_clearing_session
+                    "{}->{} amount={} status={} expecting_day={}",
+                    from, to, o.amount, status, o.expecting_operational_day
                 )
             })
             .collect();
@@ -651,7 +667,7 @@ impl CronWorker {
             allocations.len(),
             internal_data.len()
         );
-        let next_session_id = target_session_id;
+        let next_session_id = sid + 1;
         let input_obligations = Self::build_input_snapshot(&all_obligations);
         let input_snapshot_hash = Self::hash_input_snapshot(&input_obligations);
         let solver_version = env!("CARGO_PKG_VERSION").to_string();
@@ -749,6 +765,7 @@ impl CronWorker {
             let mut s = self.state.write().await;
             s.last_session_result = session_result;
             s.session_id = next_session_id;
+            s.last_clearing_operational_day = closed_operational_day;
         }
 
         tracing::info!("[Clearing session № {} finished!]", sid);
@@ -762,7 +779,7 @@ impl CronWorker {
             hasher.update(item.from.as_bytes());
             hasher.update(item.to.as_bytes());
             hasher.update(item.amount.to_le_bytes());
-            hasher.update(item.expecting_clearing_session.to_le_bytes());
+            hasher.update(item.expecting_operational_day.to_le_bytes());
             hasher.update(item.status.as_bytes());
             hasher.update(item.timestamp.to_le_bytes());
         }
@@ -924,7 +941,7 @@ impl CronWorker {
 
     async fn collect_obligations(
         client: &RpcClient,
-        target_session_id: u64,
+        target_operational_day: i64,
     ) -> Vec<(Pubkey, Obligation)> {
         let mut all_obligations: Vec<(Pubkey, Obligation)> = vec![];
 
@@ -969,7 +986,9 @@ impl CronWorker {
 
                         if (status == ObligationStatus::Confirmed
                             || status == ObligationStatus::PartiallyNetted)
-                            && obligation_account.expecting_clearing_session <= target_session_id
+                            && i64::try_from(obligation_account.expecting_operational_day)
+                                .unwrap_or(i64::MAX)
+                                <= target_operational_day
                         {
                             all_obligations.push((*pda, obligation_account));
                         }
@@ -1012,7 +1031,7 @@ mod tests {
             to: anchor_lang::prelude::Pubkey::new_from_array(to.to_bytes()),
             amount,
             timestamp,
-            expecting_clearing_session: 0,
+            expecting_operational_day: 0,
             session_id: None,
             from_cancel: false,
             to_cancel: false,

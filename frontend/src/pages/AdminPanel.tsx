@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { toast } from 'react-toastify'
 import { API_URL } from '../main'
-import { buildApplyExternalSettlementWithProofTx, buildApplyInternalNettingWithProofTx, buildCommitSessionPlanTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
+import { advanceOperationalDay, buildApplyExternalSettlementWithProofTx, buildApplyInternalNettingWithProofTx, buildCommitSessionPlanTx, buildFinalizeClearingSessionTx, buildStartClearingSessionTx, createNewPool, getAllParticipants, getClearingState, getPool, getPoolPda, getUserRole, updateFeeRate, updateSessionInterval, useProgram, withdrawFee } from '../api'
 import { ClearingAuditResult, Participant, UserType, UserTypeToString } from '../interfaces'
 import { ClipLoader } from 'react-spinners'
 import { LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js'
@@ -121,6 +121,7 @@ export default function AdminPanel() {
     const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'system'>('users')
     const [newFeeRate, setNewFeeRate] = useState<number>(0)
     const [newIntervalTime, setNewIntervalTime] = useState<number>(0)
+    const [operationalDay, setOperationalDay] = useState<number | null>(null)
     const [withdrawFeeAmount, setWithdrawFeeAmount] = useState<number>(0)
     const [escrowBalance, setEscrowBalance] = useState<number>(0)
     const [poolStats, setPoolStats] = useState<{
@@ -568,6 +569,7 @@ export default function AdminPanel() {
                 description: 'Интервал времени между сессиями клиринга'
             }
 
+            setOperationalDay(info.operational_day)
             setSystemSettings([feeRateSetting, sessionIntervalSetting])
         } catch (error) {
             console.error('Error loading settings:', error)
@@ -621,6 +623,24 @@ export default function AdminPanel() {
         } catch (error) {
             console.error('Error updating session interval: ', error)
             toast.error('Ошибка при обновлении интервала сессий')
+        } finally {
+            setActionLoading(false)
+        }
+    }
+
+    const advanceOperationalDayHandler = async () => {
+        if (!publicKey || !program) {
+            toast.error('Кошелёк не найден')
+            return;
+        }
+        try {
+            setActionLoading(true)
+            await advanceOperationalDay(program)
+            toast.success('Операционный день переведен на следующую дату')
+            await loadSystemSettings()
+        } catch (error) {
+            console.error('Error advancing operational day:', error)
+            toast.error('Ошибка при переводе операционного дня')
         } finally {
             setActionLoading(false)
         }
@@ -965,6 +985,28 @@ export default function AdminPanel() {
                 activeTab === 'system' && (
                     <div>
                         <div style={{ display: 'grid', gap: '24px' }}>
+                            <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
+                                <h3 style={{ marginBottom: '16px' }}>Операционный день</h3>
+                                <p style={{ marginBottom: '16px', color: '#666' }}>
+                                    Сегодня: <b>{operationalDay ? new Date(operationalDay * 1000).toLocaleDateString('ru-RU') : '—'}</b>
+                                </p>
+                                <button
+                                    onClick={advanceOperationalDayHandler}
+                                    disabled={actionLoading}
+                                    style={{
+                                        padding: '12px 24px',
+                                        background: actionLoading ? '#ccc' : '#667eea',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: actionLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '16px',
+                                        fontWeight: 'bold'
+                                    }}
+                                >
+                                    {actionLoading ? 'Обновление...' : 'Закрыть день и открыть следующий'}
+                                </button>
+                            </div>
                             {/* Запуск клиринга */}
                             <div style={{ padding: '24px', border: '1px solid #e0e0e0', borderRadius: '8px', background: 'white' }}>
                                 <h3 style={{ marginBottom: '16px' }}>Запуск процедуры клиринга</h3>

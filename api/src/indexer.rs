@@ -1,9 +1,10 @@
 use anchor_lang::{AccountDeserialize, AnchorDeserialize, Discriminator};
 use base64::{engine::general_purpose, Engine as _};
+use crate::cron_worker::WorkerCommand;
 use clearing_solana::{
     ObligationCancelled, ObligationConfirmed, ObligationCreated, ObligationDeclined,
-    ObligationNetted, ObligationPartiallyNetted, Participant as OnchainParticipant,
-    ParticipantRegistered, ID as PROGRAM_ID,
+    ObligationNetted, ObligationPartiallyNetted, OperationalDayAdvanced,
+    Participant as OnchainParticipant, ParticipantRegistered, ID as PROGRAM_ID,
 };
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient,
@@ -12,6 +13,8 @@ use solana_client::{
 };
 use solana_sdk::pubkey::Pubkey;
 use sqlx::PgPool;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_stream::StreamExt;
 
@@ -23,6 +26,7 @@ enum IndexedEvent {
     ObligationCancelled(ObligationCancelled),
     ObligationNetted(ObligationNetted),
     ObligationPartiallyNetted(ObligationPartiallyNetted),
+    OperationalDayAdvanced(OperationalDayAdvanced),
 }
 
 fn extract_program_data(line: &str) -> Option<&str> {
@@ -57,6 +61,9 @@ fn decode_event_payload(data: &[u8]) -> Option<IndexedEvent> {
     }
     if let Some(e) = decode::<ObligationPartiallyNetted>(data) {
         return Some(IndexedEvent::ObligationPartiallyNetted(e));
+    }
+    if let Some(e) = decode::<OperationalDayAdvanced>(data) {
+        return Some(IndexedEvent::OperationalDayAdvanced(e));
     }
     None
 }
@@ -97,6 +104,7 @@ async fn fetch_participant_account(
 async fn persist_event(
     pool: &PgPool,
     rpc_client: &RpcClient,
+    sender: &Arc<mpsc::Sender<WorkerCommand>>,
     signature: &str,
     event: IndexedEvent,
 ) -> anyhow::Result<()> {
@@ -144,14 +152,17 @@ async fn persist_event(
         IndexedEvent::ObligationCreated(e) => {
             sqlx::query(
                 r#"
-                INSERT INTO obligations (pda, from_address, to_address, original_amount, remaining_amount, status, created_at, updated_at)
+                INSERT INTO obligations (
+                    pda, from_address, to_address, original_amount, remaining_amount,
+                    expecting_operational_day, status, created_at, updated_at
+                )
                 VALUES ($1, $2, $3, $4, $4, $5, 'created', $6, $6)
                 ON CONFLICT (pda) DO UPDATE SET
                     from_address = EXCLUDED.from_address,
                     to_address = EXCLUDED.to_address,
                     original_amount = EXCLUDED.original_amount,
                     remaining_amount = EXCLUDED.remaining_amount,
-                    expecting_clearing_session = EXCLUDED.expecting_clearing_session,
+                    expecting_operational_day = EXCLUDED.expecting_operational_day,
                     status = EXCLUDED.status,
                     updated_at = EXCLUDED.updated_at
                 "#,
@@ -160,7 +171,7 @@ async fn persist_event(
             .bind(e.from.to_string())
             .bind(e.to.to_string())
             .bind(i64::try_from(e.amount).unwrap_or(i64::MAX))
-            .bind(i64::try_from(e.expecting_clearing_session).unwrap_or(i64::MAX))
+            .bind(i64::try_from(e.expecting_operational_day).unwrap_or(i64::MAX))
             .bind(e.timestamp)
             .execute(pool)
             .await?;
@@ -169,7 +180,7 @@ async fn persist_event(
                 r#"
                 INSERT INTO events (tx_signature, event_type, data, created_at)
                 VALUES ($1, 'obligation_created',
-                    jsonb_build_object('obligation', $2, 'from', $3, 'to', $4, 'amount', $5, 'expecting_clearing_session', $6), $7)
+                    jsonb_build_object('obligation', $2, 'from', $3, 'to', $4, 'amount', $5, 'expecting_operational_day', $6), $7)
                 ON CONFLICT (tx_signature) DO NOTHING
                 "#,
             )
@@ -178,7 +189,7 @@ async fn persist_event(
             .bind(e.from.to_string())
             .bind(e.to.to_string())
             .bind(i64::try_from(e.amount).unwrap_or(i64::MAX))
-            .bind(i64::try_from(e.expecting_clearing_session).unwrap_or(i64::MAX))
+            .bind(i64::try_from(e.expecting_operational_day).unwrap_or(i64::MAX))
             .bind(e.timestamp)
             .execute(pool)
             .await?;
@@ -230,11 +241,43 @@ async fn persist_event(
             .execute(pool)
             .await?;
         }
+        IndexedEvent::OperationalDayAdvanced(e) => {
+            sqlx::query(
+                r#"
+                INSERT INTO events (tx_signature, event_type, data, created_at)
+                VALUES ($1, 'operational_day_advanced',
+                    jsonb_build_object('admin', $2, 'new_operational_day', $3), $4)
+                ON CONFLICT (tx_signature) DO NOTHING
+                "#,
+            )
+            .bind(signature)
+            .bind(e.admin.to_string())
+            .bind(e.new_operational_day)
+            .bind(e.timestamp)
+            .execute(pool)
+            .await?;
+
+            if let Err(err) = sender
+                .send(WorkerCommand::OperationalDayClosed(e.new_operational_day))
+                .await
+            {
+                tracing::error!(
+                    "Failed to notify worker about operational day close for tx {}: {}",
+                    signature,
+                    err
+                );
+            }
+        }
     }
     Ok(())
 }
 
-pub async fn index_loop(ws_url: String, rpc_url: String, pool: PgPool) -> anyhow::Result<()> {
+pub async fn index_loop(
+    ws_url: String,
+    rpc_url: String,
+    pool: PgPool,
+    sender: Arc<mpsc::Sender<WorkerCommand>>,
+) -> anyhow::Result<()> {
     let rpc_client = RpcClient::new(rpc_url);
     loop {
         let pubsub_client = match PubsubClient::new(&ws_url).await {
@@ -273,7 +316,7 @@ pub async fn index_loop(ws_url: String, rpc_url: String, pool: PgPool) -> anyhow
             let signature = msg.value.signature.clone();
             let events = parse_events(&msg.value.logs);
             for event in events {
-                if let Err(err) = persist_event(&pool, &rpc_client, &signature, event).await {
+                if let Err(err) = persist_event(&pool, &rpc_client, &sender, &signature, event).await {
                     tracing::error!("Indexer persist failed for {signature}: {err:?}");
                 }
             }
