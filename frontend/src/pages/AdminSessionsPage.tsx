@@ -24,7 +24,6 @@ function renderSessionDetails(audit: ClearingAuditResult) {
                 <div><b>Result hash:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
                 <div><b>Merkle root:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
                 <div><b>Solver:</b> {audit.solver_version || "n/a"} | <b>Build:</b> {audit.build_sha || "n/a"}</div>
-                <div><b>Allocator mode:</b> {audit.allocator_mode || "n/a"}</div>
                 {audit.fallback_reason ? <div><b>Fallback reason:</b> {audit.fallback_reason}</div> : null}
                 {audit.flow_objective ? <div><b>Flow objective:</b> {audit.flow_objective}</div> : null}
                 {audit.flow_total_cost != null ? <div><b>Flow total cost:</b> {audit.flow_total_cost}</div> : null}

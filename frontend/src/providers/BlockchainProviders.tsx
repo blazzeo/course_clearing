@@ -11,10 +11,9 @@ interface AppProvidersProps {
     children: ReactNode;
     program: Program<ClearingSolana>;
     publicKey: PublicKey | null;
-    isAdmin: boolean;
 }
 
-export function AppProviders({ children, program, publicKey, isAdmin }: AppProvidersProps) {
+export function AppProviders({ children, program, publicKey }: AppProvidersProps) {
     return (
         <ParticipantProvider program={program} publicKey={publicKey}>
             <ObligationsProvider program={program} publicKey={publicKey}>

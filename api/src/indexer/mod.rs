@@ -1,6 +1,8 @@
+//! Подписка на логи программы Solana и диспетчеризация команд воркеру.
+
+use crate::worker::WorkerCommand;
 use anchor_lang::{AccountDeserialize, AnchorDeserialize, Discriminator};
 use base64::{engine::general_purpose, Engine as _};
-use crate::cron_worker::WorkerCommand;
 use clearing_solana::{
     ObligationCancelled, ObligationConfirmed, ObligationCreated, ObligationDeclined,
     ObligationNetted, ObligationPartiallyNetted, OperationalDayAdvanced,
@@ -262,6 +264,12 @@ async fn persist_event(
             .execute(pool)
             .await?;
 
+            tracing::debug!(
+                "Indexer event: OperationalDayAdvanced tx={} admin={} new_operational_day={} -> dispatch WorkerCommand::OperationalDayClosed",
+                signature,
+                e.admin,
+                e.new_operational_day
+            );
             if let Err(err) = sender
                 .send(WorkerCommand::OperationalDayClosed(e.new_operational_day))
                 .await
@@ -290,6 +298,13 @@ async fn persist_event(
             .execute(pool)
             .await?;
 
+            tracing::debug!(
+                "Indexer event: SessionIntervalTimeUpdated tx={} admin={} old_interval={} new_interval={} -> dispatch WorkerCommand::IntervalUpdated",
+                signature,
+                e.admin,
+                e.old_interval_time,
+                e.new_interval_time
+            );
             if let Err(err) = sender
                 .send(WorkerCommand::IntervalUpdated(e.new_interval_time))
                 .await
@@ -307,11 +322,10 @@ async fn persist_event(
 
 pub async fn index_loop(
     ws_url: String,
-    rpc_url: String,
+    rpc_client: Arc<RpcClient>,
     pool: PgPool,
     sender: Arc<mpsc::Sender<WorkerCommand>>,
 ) -> anyhow::Result<()> {
-    let rpc_client = RpcClient::new(rpc_url);
     loop {
         let pubsub_client = match PubsubClient::new(&ws_url).await {
             Ok(c) => c,
@@ -349,7 +363,9 @@ pub async fn index_loop(
             let signature = msg.value.signature.clone();
             let events = parse_events(&msg.value.logs);
             for event in events {
-                if let Err(err) = persist_event(&pool, &rpc_client, &sender, &signature, event).await {
+                if let Err(err) =
+                    persist_event(&pool, &rpc_client, &sender, &signature, event).await
+                {
                     tracing::error!("Indexer persist failed for {signature}: {err:?}");
                 }
             }

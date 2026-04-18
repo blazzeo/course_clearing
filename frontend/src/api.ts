@@ -110,17 +110,6 @@ export async function getParticipant(
     };
 }
 
-export async function initEscrow(program: Program<ClearingSolana>) {
-    const authority = program.provider.publicKey;
-
-    return await program.methods
-        .initEscrow()
-        .accounts({
-            authority,
-        })
-        .rpc();
-}
-
 export async function registerObligation(
     program: Program<ClearingSolana>,
     from: PublicKey,
@@ -277,31 +266,6 @@ export async function declineObligation(program: Program<ClearingSolana>, obliga
         .rpc();
 }
 
-export async function finalizeClearingSession(program: Program<ClearingSolana>) {
-    const authority = program.provider.publicKey;
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-    const stateAccount = await program.account.clearingState.fetch(state);
-    const [session] = PublicKey.findProgramAddressSync(
-        [
-            Buffer.from("session"),
-            new BN(stateAccount.totalSessions.toString()).toArrayLike(Buffer, "le", 8),
-        ],
-        program.programId
-    );
-
-    return await program.methods
-        .finalizeClearingSession()
-        .accounts({
-            state,
-            session,
-            authority,
-        })
-        .rpc();
-}
-
 export async function buildFinalizeClearingSessionTx(
     program: Program<ClearingSolana>,
     sessionId?: number
@@ -367,43 +331,14 @@ export async function buildCommitSessionPlanTx(
         .transaction();
 }
 
-export async function startClearingSession(program: Program<ClearingSolana>, totalObligations: number) {
-    const authority = program.provider.publicKey;
-
-    const total_obligations = new BN(totalObligations);
-
-    // state
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-
-    const stateAccount = await program.account.clearingState.fetch(state);
-
-    //	session
-    const [session] = PublicKey.findProgramAddressSync(
-        [
-            Buffer.from('session'),
-            new BN(stateAccount.totalSessions.toString()).addn(1).toArrayLike(Buffer, 'le', 8),
-        ],
-        program.programId
-    )
-
-    return await program.methods
-        .startClearingSession(total_obligations)
-        .accounts({
-            session,
-            authority,
-        })
-        .rpc();
-}
-
 export async function buildStartClearingSessionTx(
     program: Program<ClearingSolana>,
-    totalObligations: number
+    totalObligations: number,
+    settlementOperationalDay: number
 ): Promise<Transaction> {
     const authority = program.provider.publicKey;
     const total_obligations = new BN(totalObligations);
+    const settlement_operational_day = new BN(settlementOperationalDay);
     const [state] = PublicKey.findProgramAddressSync(
         [Buffer.from("state")],
         program.programId
@@ -418,10 +353,12 @@ export async function buildStartClearingSessionTx(
     );
 
     return await program.methods
-        .startClearingSession(total_obligations)
+        .startClearingSession(total_obligations, settlement_operational_day)
         .accounts({
+            state,
             session,
             authority,
+            systemProgram: SystemProgram.programId,
         })
         .transaction();
 }
@@ -450,170 +387,6 @@ export async function createNewPool(program: Program<ClearingSolana>, last_pool_
             authority,
         })
         .rpc();
-}
-
-export async function createPositionByObligation(
-    program: Program<ClearingSolana>,
-    obligationPda: PublicKey,
-    amount: number
-) {
-    const payer = program.provider.publicKey;
-    if (!payer) throw new Error("Wallet not connected");
-
-    const obligation = await program.account.obligation.fetch(obligationPda);
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-    const stateAccount = await program.account.clearingState.fetch(state);
-    const [session] = PublicKey.findProgramAddressSync(
-        [Buffer.from("session"), new BN(stateAccount.totalSessions.toString()).toArrayLike(Buffer, "le", 8)],
-        program.programId
-    );
-    const [pool] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
-        program.programId
-    );
-    const [fromPosition] = PublicKey.findProgramAddressSync(
-        [Buffer.from("position"), session.toBuffer(), obligation.from.toBuffer(), obligation.to.toBuffer()],
-        program.programId
-    );
-
-    return await (program as any).methods
-        .createPosition(obligation.from, obligation.to, obligation.timestamp, new BN(amount))
-        .accounts({
-            state,
-            session,
-            obligation: obligationPda,
-            pool,
-            pairPosition: fromPosition,
-            payer,
-            systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-}
-
-export async function buildApplyInternalNettingTx(
-    program: Program<ClearingSolana>,
-    obligationPda: PublicKey,
-    amount: number,
-    sessionId?: number
-): Promise<Transaction> {
-    const authority = program.provider.publicKey;
-    if (!authority) throw new Error("Wallet not connected");
-    const obligation = await program.account.obligation.fetch(obligationPda);
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-    const stateAccount = await program.account.clearingState.fetch(state);
-    const effectiveSessionId =
-        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
-    const [session] = PublicKey.findProgramAddressSync(
-        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
-        program.programId
-    );
-    const [pool] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
-        program.programId
-    );
-    return await (program as any).methods
-        .applyInternalNetting(
-            obligation.from,
-            obligation.to,
-            obligation.timestamp,
-            new BN(amount)
-        )
-        .accounts({
-            state,
-            session,
-            obligation: obligationPda,
-            pool,
-            authority,
-        })
-        .transaction();
-}
-
-export async function applyInternalNetting(
-    program: Program<ClearingSolana>,
-    obligationPda: PublicKey,
-    amount: number
-) {
-    const authority = program.provider.publicKey;
-    if (!authority) throw new Error("Wallet not connected");
-    const obligation = await program.account.obligation.fetch(obligationPda);
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-    const stateAccount = await program.account.clearingState.fetch(state);
-    const [session] = PublicKey.findProgramAddressSync(
-        [Buffer.from("session"), new BN(stateAccount.totalSessions.toString()).toArrayLike(Buffer, "le", 8)],
-        program.programId
-    );
-    const [pool] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
-        program.programId
-    );
-    return await (program as any).methods
-        .applyInternalNetting(
-            obligation.from,
-            obligation.to,
-            obligation.timestamp,
-            new BN(amount)
-        )
-        .accounts({
-            state,
-            session,
-            obligation: obligationPda,
-            pool,
-            authority,
-        })
-        .rpc();
-}
-
-export async function buildCreatePositionByObligationTx(
-    program: Program<ClearingSolana>,
-    obligationPda: PublicKey,
-    amount: number,
-    sessionId?: number
-): Promise<Transaction> {
-    const payer = program.provider.publicKey;
-    if (!payer) throw new Error("Wallet not connected");
-
-    const obligation = await program.account.obligation.fetch(obligationPda);
-    const [state] = PublicKey.findProgramAddressSync(
-        [Buffer.from("state")],
-        program.programId
-    );
-    const stateAccount = await program.account.clearingState.fetch(state);
-    const effectiveSessionId =
-        sessionId ?? new BN(stateAccount.totalSessions.toString()).toNumber();
-    const [session] = PublicKey.findProgramAddressSync(
-        [Buffer.from("session"), new BN(effectiveSessionId).toArrayLike(Buffer, "le", 8)],
-        program.programId
-    );
-    const [pool] = PublicKey.findProgramAddressSync(
-        [Buffer.from("pool"), new BN(obligation.poolId.toString()).toArrayLike(Buffer, "le", 4)],
-        program.programId
-    );
-    const [fromPosition] = PublicKey.findProgramAddressSync(
-        [Buffer.from("position"), session.toBuffer(), obligation.from.toBuffer(), obligation.to.toBuffer()],
-        program.programId
-    );
-
-    return await (program as any).methods
-        .createPosition(obligation.from, obligation.to, obligation.timestamp, new BN(amount))
-        .accounts({
-            state,
-            session,
-            obligation: obligationPda,
-            pool,
-            pairPosition: fromPosition,
-            payer,
-            systemProgram: SystemProgram.programId,
-        })
-        .transaction();
 }
 
 export async function buildApplyInternalNettingWithProofTx(
@@ -840,21 +613,6 @@ export async function withdrawFee(program: Program<ClearingSolana>, amount: numb
         .rpc();
 }
 
-export async function updateUserType(
-    program: Program<ClearingSolana>,
-    participant: PublicKey,
-    userType: AnchorEnum
-) {
-    const authority = program.provider.publicKey;
-
-    return await program.methods
-        .updateUserType(participant, userType)
-        .accounts({
-            authority,
-        })
-        .rpc();
-}
-
 export async function payFee(program: Program<ClearingSolana>, session_id: number, creditor: PublicKey) {
     const authority = program.provider.publicKey;
     if (!authority) throw new Error("Wallet not connected");
@@ -1012,11 +770,6 @@ export function getPoolPda(
         ],
         program.programId
     )[0]
-}
-
-export async function poolExists(connection: Connection, pda: PublicKey) {
-    const acc = await connection.getAccountInfo(pda)
-    return acc !== null
 }
 
 export async function getPool(

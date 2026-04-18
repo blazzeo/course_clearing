@@ -30,7 +30,6 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             <div style={{ background: "#f8fafc", borderRadius: "6px", padding: "8px" }}>
                 <div><b>Result hash:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
                 <div><b>Merkle root:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
-                <div><b>Allocator mode:</b> {audit.allocator_mode || "n/a"}</div>
                 <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
             </div>
 

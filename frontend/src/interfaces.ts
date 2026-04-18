@@ -122,13 +122,14 @@ export interface ClearingAuditResult {
     internal_count?: number;
     merkle_root: string;
     merkle_leaves: ClearingAuditLeaf[];
-    allocator_mode?: "direct" | "transitive" | "full_fallback" | string;
     fallback_reason?: string | null;
     flow_total_cost?: number | null;
     flow_objective?: string | null;
     flow_unmet_demand?: number | null;
     audit_log: ClearingAuditLogEntry[];
     timestamp: number;
+    /** День расчёта сессии (граница операционного дня, unix), совпадает с on-chain session */
+    settlement_operational_day?: number;
 }
 
 export interface ClearingSessionSummary {

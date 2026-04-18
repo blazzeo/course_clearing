@@ -47,6 +47,11 @@ export default function AdminObligationsPage() {
         return new Date(tsMs).toLocaleString("ru-RU");
     };
 
+    const formatOperationalDay = (dayTs?: number) => {
+        if (!dayTs) return "-";
+        return new Date(dayTs * 1000).toLocaleDateString("ru-RU");
+    };
+
     const getStatusClass = (status: ObligationStatus) => {
         switch (status) {
             case ObligationStatus.Created:
@@ -164,6 +169,7 @@ export default function AdminObligationsPage() {
                                 <th>Сумма (остаток / номинал)</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
+                                <th>Опер. день расчета</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -178,6 +184,7 @@ export default function AdminObligationsPage() {
                                     </td>
                                     <td><span className={getStatusClass(o.status)}>{MapObligationStatus(o.status)}</span></td>
                                     <td>{formatDate(o.timestamp)}</td>
+                                    <td>{formatOperationalDay(o.expectingOperationalDay)}</td>
                                 </tr>
                             ))}
                         </tbody>

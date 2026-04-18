@@ -11,6 +11,7 @@ dist/
 # Solana
 .DS_Store
 test-ledger/
+.localnet-ledger/
 *.so
 
 # IDE

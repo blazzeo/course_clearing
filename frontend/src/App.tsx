@@ -23,7 +23,6 @@ import { getUserRole, useProgram } from './api'
 import { UserType } from './interfaces'
 import { AppProviders } from './providers/BlockchainProviders'
 import { useUserRole } from './providers/UserTypeProvider'
-import { ClipLoader } from 'react-spinners'
 import ParticipantPage from './pages/Participant'
 
 function App() {
@@ -52,7 +51,7 @@ function App() {
     }
 
     return (
-        <AppProviders program={program!} publicKey={publicKey} isAdmin={userRole === UserType.Administator}>
+        <AppProviders program={program!} publicKey={publicKey}>
             <ToastContainer position="top-right" autoClose={3000} />
             <Layout userType={userRole} onRoleUpdate={setUserRole}>
                 <Routes>

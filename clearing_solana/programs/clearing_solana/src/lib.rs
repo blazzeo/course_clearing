@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use sha2::{Digest, Sha256};
 
-declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
+declare_id!("BNX6hQwS6qsF7o91ve3mEjLzQU7W276yvZUwgMfscn5t");
 const DAY_SECONDS_I64: i64 = 86_400;
 
 #[program]
@@ -168,9 +168,15 @@ pub mod clearing_solana {
             ClearingError::InvalidObligationStatus
         );
         require!(amount > 0, ClearingError::InvalidAllocationAmount);
-        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        require!(
+            obligation.amount >= amount,
+            ClearingError::InvalidAllocationAmount
+        );
         if let Some(existing_session) = obligation.session_id {
-            require!(existing_session == session_id, ClearingError::SessionMismatch);
+            require!(
+                existing_session == session_id,
+                ClearingError::SessionMismatch
+            );
         } else {
             obligation.session_id = Some(session_id);
         }
@@ -254,9 +260,15 @@ pub mod clearing_solana {
                 || obligation.status == ObligationStatus::PartiallyNetted,
             ClearingError::InvalidObligationStatus
         );
-        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        require!(
+            obligation.amount >= amount,
+            ClearingError::InvalidAllocationAmount
+        );
         if let Some(existing_session) = obligation.session_id {
-            require!(existing_session == session_id, ClearingError::SessionMismatch);
+            require!(
+                existing_session == session_id,
+                ClearingError::SessionMismatch
+            );
         } else {
             obligation.session_id = Some(session_id);
         }
@@ -317,7 +329,7 @@ pub mod clearing_solana {
 
         session.status = ClearingSessionStatus::Closed;
         session.closed_at = clock.unix_timestamp;
-        state.last_clearing_operational_day = state.operational_day;
+        state.last_clearing_operational_day = session.settlement_operational_day;
 
         Ok(())
     }
@@ -325,11 +337,16 @@ pub mod clearing_solana {
     pub fn start_clearing_session(
         ctx: Context<StartClearingSession>,
         total_obligations: u32,
+        settlement_operational_day: i64,
     ) -> Result<()> {
         let clock = Clock::get()?;
         require!(
             ctx.accounts.state.super_admin == Some(ctx.accounts.authority.key()),
             CustomErrors::Unauthorized
+        );
+        require!(
+            settlement_operational_day <= ctx.accounts.state.operational_day,
+            ClearingError::InvalidSettlementOperationalDay
         );
 
         // Increment session_id
@@ -353,6 +370,7 @@ pub mod clearing_solana {
         session.expected_external_count = 0;
         session.applied_internal_count = 0;
         session.applied_external_count = 0;
+        session.settlement_operational_day = settlement_operational_day;
         session.bump = ctx.bumps.session;
 
         Ok(())
@@ -420,9 +438,15 @@ pub mod clearing_solana {
                 || obligation.status == ObligationStatus::PartiallyNetted,
             ClearingError::InvalidObligationStatus
         );
-        require!(obligation.amount >= amount, ClearingError::InvalidAllocationAmount);
+        require!(
+            obligation.amount >= amount,
+            ClearingError::InvalidAllocationAmount
+        );
         if let Some(existing_session) = obligation.session_id {
-            require!(existing_session == session_id, ClearingError::SessionMismatch);
+            require!(
+                existing_session == session_id,
+                ClearingError::SessionMismatch
+            );
         } else {
             obligation.session_id = Some(session_id);
         }
@@ -673,7 +697,10 @@ pub mod clearing_solana {
             SettlePositionError::InvalidRecipient
         );
         require!(amount > 0, SettlePositionError::InvalidAmount);
-        require!(net_position.net_amount >= amount, SettlePositionError::Overpay);
+        require!(
+            net_position.net_amount >= amount,
+            SettlePositionError::Overpay
+        );
 
         // transfer
         let cpi_ctx = CpiContext::new(
@@ -941,8 +968,8 @@ pub mod clearing_solana {
 
         emit!(SessionIntervalTimeUpdated {
             admin: admin.authority,
-            old_interval_time: old_interval_time,
-            new_interval_time: new_interval_time,
+            old_interval_time,
+            new_interval_time,
             timestamp: clock.unix_timestamp
         });
 
@@ -1128,6 +1155,8 @@ pub struct ClearingSession {
     pub expected_external_count: u32,
     pub applied_internal_count: u32,
     pub applied_external_count: u32,
+    /// Начало операционного дня (unix, граница суток), за который проводится эта сессия.
+    pub settlement_operational_day: i64,
     pub bump: u8,
 }
 
@@ -1144,6 +1173,7 @@ impl ClearingSession {
         4 +  // expected_external_count
         4 +  // applied_internal_count
         4 +  // applied_external_count
+        8 +  // settlement_operational_day
         1; // bump
 
     pub fn pda(session_id: u64) -> (Pubkey, u8) {
@@ -2024,6 +2054,7 @@ pub enum ClearingError {
     InvalidLeafHash,
     InvalidMerkleProof,
     InvalidSettlementParticipants,
+    InvalidSettlementOperationalDay,
 }
 
 #[derive(Accounts)]
@@ -2520,7 +2551,10 @@ mod tests {
         let to = Pubkey::new_unique();
         let leaf = hash_external_leaf(from, to, 42);
         let wrong_sibling = hash_external_leaf(Pubkey::new_unique(), Pubkey::new_unique(), 42);
-        let root = parent(leaf, hash_external_leaf(Pubkey::new_unique(), Pubkey::new_unique(), 99));
+        let root = parent(
+            leaf,
+            hash_external_leaf(Pubkey::new_unique(), Pubkey::new_unique(), 99),
+        );
         let proof = vec![wrong_sibling];
         assert!(!verify_merkle_proof(leaf, &proof, 0, root));
     }

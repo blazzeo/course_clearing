@@ -79,13 +79,13 @@ export default function AdminPanel() {
                 leaf_hash: string;
                 proof: string[];
             }[];
-            allocator_mode?: string;
             fallback_reason?: string | null;
             flow_total_cost?: number | null;
             flow_objective?: string | null;
             flow_unmet_demand?: number | null;
             audit_log?: { step: string; detail: string; timestamp: number }[];
             timestamp: number;
+            settlement_operational_day?: number;
         };
         error?: string;
     }
@@ -102,13 +102,13 @@ export default function AdminPanel() {
         internal_data: r.internal_data ?? [],
         merkle_root: r.merkle_root ?? "",
         merkle_leaves: r.merkle_leaves ?? [],
-        allocator_mode: r.allocator_mode,
         fallback_reason: r.fallback_reason,
         flow_total_cost: r.flow_total_cost,
         flow_objective: r.flow_objective,
         flow_unmet_demand: r.flow_unmet_demand,
         audit_log: r.audit_log ?? [],
         timestamp: r.timestamp,
+        settlement_operational_day: r.settlement_operational_day,
     });
 
     const [allUsers, setAllUsers] = useState<Participant[]>([])
@@ -198,12 +198,25 @@ export default function AdminPanel() {
         return { message, signature: signatureBase64, nonce, timestamp };
     }
 
+    const notifyClearingStateChanged = () => {
+        window.dispatchEvent(new Event("clearing-state-changed"));
+    };
+
+    /** @returns true если транзакции реально отправлены; false если сессия уже была в цепочке (идемпотентный пропуск). */
     const executeOnChainAllocations = async (
         requestId: string,
         result: NonNullable<ClearingApiResponse["data"]>
-    ) => {
+    ): Promise<boolean> => {
         if (!publicKey || !program) {
             throw new Error("Кошелек не найден")
+        }
+        const chainGate = await getClearingState(program);
+        if (chainGate.total_sessions >= result.session_id) {
+            logClearing(requestId, "skip: session already reflected on-chain", {
+                total_sessions: chainGate.total_sessions,
+                result_session_id: result.session_id,
+            });
+            return false;
         }
         const { externalLeaves, internalLeaves, merkleRoot } = buildOnChainOperations(result);
         const applicableInternalLeaves: typeof internalLeaves = [];
@@ -251,9 +264,21 @@ export default function AdminPanel() {
         if (signAllTransactions) {
             const state = await getClearingState(program);
             const nextSessionId = state.total_sessions + 1;
-            logClearing(requestId, "batch mode session prepared", { nextSessionId });
+            const settlementOperationalDay =
+                result.settlement_operational_day ??
+                Number(state.operational_day) - 86_400;
+            logClearing(requestId, "batch mode session prepared", {
+                nextSessionId,
+                settlementOperationalDay,
+            });
             const txs = [];
-            txs.push(await buildStartClearingSessionTx(program, externalLeaves.length + applicableInternalLeaves.length));
+            txs.push(
+                await buildStartClearingSessionTx(
+                    program,
+                    externalLeaves.length + applicableInternalLeaves.length,
+                    settlementOperationalDay
+                )
+            );
             txs.push(
                 await buildCommitSessionPlanTx(
                     program,
@@ -308,6 +333,7 @@ export default function AdminPanel() {
             throw new Error("Wallet does not support signAllTransactions for merkle batch pipeline");
         }
         logClearing(requestId, "on-chain execution finished");
+        return true;
     }
 
     const buildOnChainOperations = (
@@ -447,25 +473,23 @@ export default function AdminPanel() {
                 toast.info("Новой сессии не было");
                 return;
             }
-            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
-            const onchainState = await getClearingState(program);
-            if (result.session_id <= onchainState.total_sessions) {
-                logClearing(requestId, "skipped: session already applied on-chain", {
-                    resultSessionId: result.session_id,
-                    onchainTotalSessions: onchainState.total_sessions,
-                });
-                toast.info(`Сессия #${result.session_id} уже обработана, повторное выставление счетов пропущено.`);
-                return;
-            }
-            await executeOnChainAllocations(requestId, result);
+            const extCount = result.data?.length ?? 0;
+            const intCount = (result.internal_data ?? []).filter((x) => Number(x.flow_used || 0) > 0).length;
+            const applied = await executeOnChainAllocations(requestId, result);
             setLastHandledResultId(result.result_id);
             setLastHandledSessionId(result.session_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
-                processed: externalLeaves.length + internalLeaves.length,
+                processed: extCount + intCount,
+                applied,
             });
 
-            toast.success(`Клиринг завершен. Обработано обязательств: ${externalLeaves.length + internalLeaves.length}`);
+            if (applied) {
+                notifyClearingStateChanged();
+                toast.success(`Клиринг завершен. Обработано обязательств: ${extCount + intCount}`);
+            } else {
+                toast.info(`Сессия #${result.session_id} уже отражена в блокчейне, повторное выставление счетов не требуется.`);
+            }
         } catch (error) {
             logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при проведении операции')
@@ -504,29 +528,22 @@ export default function AdminPanel() {
                 toast.info("Новой сессии не было");
                 return;
             }
-            if (!result.data.length && !(result.internal_data?.length)) {
-                logClearing(requestId, "skipped: empty result");
-                toast.info("Новой сессии не было");
-                return;
-            }
-            const { externalLeaves, internalLeaves } = buildOnChainOperations(result);
-            const onchainState = await getClearingState(program);
-            if (result.session_id <= onchainState.total_sessions) {
-                logClearing(requestId, "skipped: session already applied on-chain", {
-                    resultSessionId: result.session_id,
-                    onchainTotalSessions: onchainState.total_sessions,
-                });
-                toast.info(`Сессия #${result.session_id} уже обработана, повторное выставление счетов пропущено.`);
-                return;
-            }
-            await executeOnChainAllocations(requestId, result);
+            const extCount = result.data?.length ?? 0;
+            const intCount = (result.internal_data ?? []).filter((x) => Number(x.flow_used || 0) > 0).length;
+            const applied = await executeOnChainAllocations(requestId, result);
             setLastHandledResultId(result.result_id);
             setLastHandledSessionId(result.session_id);
             setLastAudit(auditFromClearingApiData(result));
             logClearing(requestId, "handler finished successfully", {
-                processed: externalLeaves.length + internalLeaves.length,
+                processed: extCount + intCount,
+                applied,
             });
-            toast.success(`Обработан последний результат сессии. Обязательств: ${externalLeaves.length + internalLeaves.length}`);
+            if (applied) {
+                notifyClearingStateChanged();
+                toast.success(`Обработан последний результат сессии. Обязательств: ${extCount + intCount}`);
+            } else {
+                toast.info(`Сессия #${result.session_id} уже отражена в блокчейне, повторное выставление счетов не требуется.`);
+            }
         } catch (error) {
             logClearingError(requestId, "handler failed", error);
             toast.error('Ошибка при обработке последнего результата')
@@ -627,6 +644,7 @@ export default function AdminPanel() {
 
             toast.success('Интервал сессий успешно обновлен')
             await loadSystemSettings()
+            notifyClearingStateChanged()
         } catch (error) {
             console.error('Error updating session interval: ', error)
             toast.error('Ошибка при обновлении интервала сессий')
@@ -645,6 +663,7 @@ export default function AdminPanel() {
             await advanceOperationalDay(program)
             toast.success('Операционный день переведен на следующую дату')
             await loadSystemSettings()
+            notifyClearingStateChanged()
         } catch (error) {
             console.error('Error advancing operational day:', error)
             toast.error('Ошибка при переводе операционного дня')

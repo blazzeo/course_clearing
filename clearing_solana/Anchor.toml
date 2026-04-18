@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-clearing_solana = "GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd"
+clearing_solana = "BNX6hQwS6qsF7o91ve3mEjLzQU7W276yvZUwgMfscn5t"
 
 [registry]
 url = "https://api.apr.dev"

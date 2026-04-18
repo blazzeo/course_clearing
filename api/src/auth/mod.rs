@@ -1,3 +1,5 @@
+//! Проверка подписи админских запросов (ed25519 / Solana).
+
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 

@@ -67,6 +67,10 @@ describe("clearing_solana", () => {
       .rpc();
   };
 
+  /** Согласовано с воркером: день расчёта = «закрытый» день относительно текущего operational_day. */
+  const settlementDayForState = (state: { operationalDay: BN }) =>
+    new BN(state.operationalDay.toString()).subn(86_400);
+
   const nameHash = (name: string): number[] =>
     Array.from(createHash("sha256").update(name.trim().toLowerCase()).digest());
 
@@ -275,7 +279,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(3))
+      .startClearingSession(new BN(3), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -342,7 +346,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(3))
+      .startClearingSession(new BN(3), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -431,7 +435,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(1))
+      .startClearingSession(new BN(1), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -478,7 +482,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(1))
+      .startClearingSession(new BN(1), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -556,7 +560,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(1))
+      .startClearingSession(new BN(1), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -592,7 +596,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(1))
+      .startClearingSession(new BN(1), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
 
@@ -636,7 +640,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(1))
+      .startClearingSession(new BN(1), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);
@@ -694,7 +698,7 @@ describe("clearing_solana", () => {
     const nextSession = Number(stateBefore.totalSessions.toString()) + 1;
     const sess = sessionPda(nextSession);
     await program.methods
-      .startClearingSession(new BN(5))
+      .startClearingSession(new BN(5), settlementDayForState(stateBefore))
       .accounts({ state: statePda, session: sess, authority: admin.publicKey, systemProgram: SystemProgram.programId })
       .rpc();
     await commitEmptyPlan(sess);

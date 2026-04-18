@@ -1,117 +1,16 @@
+//! Min-cost flow и неттинг обязательств.
+
 use clearing_solana::Obligation;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 
-#[derive(Clone, Copy)]
-struct ObligationEdge {
-    pda: Pubkey,
-    from: Pubkey,
-    to: Pubkey,
-    amount: u64,
-}
-
-#[derive(Clone, Copy)]
-pub struct ExternalSettlement {
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
-}
-
-#[derive(Clone, Copy)]
-pub struct InternalNetting {
-    pub obligation: Pubkey,
-    pub amount: u64,
-    /// Merkle/on-chain internal: встречное A↔B + снятие циклов + MCMF по остатку.
-    pub flow_used: u64,
-    pub edge_used_in_flow: bool,
-    pub edge_used_in_cycle: bool,
-}
-
-pub struct FlowSolveResult {
-    pub external_settlements: Vec<ExternalSettlement>,
-    pub internal_nettings: Vec<InternalNetting>,
-    pub total_cost: i128,
-    pub unmet_demand: u64,
-    pub total_flow: u64,
-    pub total_positive_net: u64,
-    pub objective: &'static str,
-}
-
-// Flow/capacity type (signed to support residual graph operations).
-type F = i128;
-// Cost type (integer to avoid floating-point instability).
-type W = i128;
+use super::models::{
+    ExternalSettlement, FlowGraph, FlowSolveResult, InternalNetting, ObligationEdge, F, Q, W,
+};
 
 const FINF: F = i128::MAX / 4;
 const WINF: W = i128::MAX / 4;
 const ZERO: W = 0;
-
-#[derive(Clone, Copy)]
-struct Edge {
-    // constant
-    v: usize,
-    r: usize,
-    cap: F,
-    cost: W,
-    // variable
-    f: F,
-}
-
-impl Edge {
-    fn new(v: usize, r: usize, cap: F, cost: W) -> Self {
-        Self {
-            v,
-            r,
-            cap,
-            cost,
-            f: 0,
-        }
-    }
-}
-
-struct FlowGraph {
-    edges: Vec<Vec<Edge>>,
-}
-
-impl FlowGraph {
-    fn new(n: usize) -> Self {
-        Self {
-            edges: (0..n).map(|_| vec![]).collect(),
-        }
-    }
-
-    fn add_arc(&mut self, u: usize, v: usize, c: F, cost: W) {
-        let rev_idx_on_v = self.edges[v].len();
-        self.edges[u].push(Edge::new(v, rev_idx_on_v, c, cost));
-
-        let rev_idx_on_u = self.edges[u].len() - 1;
-        self.edges[v].push(Edge::new(u, rev_idx_on_u, 0, -cost));
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Q {
-    u: usize,
-    c: F,
-    w: W,
-}
-
-impl PartialOrd for Q {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Q {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // reverse for min-heap behavior on BinaryHeap
-        other
-            .w
-            .cmp(&self.w)
-            .then_with(|| other.u.cmp(&self.u))
-            .then_with(|| other.c.cmp(&self.c))
-    }
-}
 
 struct Mcmf<'g> {
     g: &'g mut FlowGraph,
@@ -254,10 +153,7 @@ fn bilateral_offset_by_pda(obligations: &[(Pubkey, Obligation)]) -> HashMap<Pubk
     for (pda, o) in obligations {
         let from = Pubkey::new_from_array(o.from.to_bytes());
         let to = Pubkey::new_from_array(o.to.to_bytes());
-        by_dir
-            .entry((from, to))
-            .or_default()
-            .push((*pda, o.amount));
+        by_dir.entry((from, to)).or_default().push((*pda, o.amount));
     }
     for v in by_dir.values_mut() {
         v.sort_by(|a, b| a.0.to_bytes().cmp(&b.0.to_bytes()));
@@ -555,10 +451,7 @@ pub fn solve_min_cost_flow(obligations: &[(Pubkey, Obligation)]) -> Option<FlowS
 
     let bilateral = bilateral_offset_by_pda(obligations);
 
-    let mut participants: Vec<Pubkey> = edges_orig
-        .iter()
-        .flat_map(|e| [e.from, e.to])
-        .collect();
+    let mut participants: Vec<Pubkey> = edges_orig.iter().flat_map(|e| [e.from, e.to]).collect();
     participants.sort_by_key(|p| p.to_bytes());
     participants.dedup();
     let participant_index: BTreeMap<Pubkey, usize> = participants
@@ -595,58 +488,65 @@ pub fn solve_min_cost_flow(obligations: &[(Pubkey, Obligation)]) -> Option<FlowS
         *pair_caps.entry((from_idx, to_idx)).or_insert(0) += edge.amount;
     }
     let reduced_by_cycle_pairs = eliminate_cycles(&mut pair_caps, participants.len());
-    let cycle_by_pda =
-        allocate_pair_reduction_by_pda(&edges_after_bilateral, &participant_index, &reduced_by_cycle_pairs)?;
+    let cycle_by_pda = allocate_pair_reduction_by_pda(
+        &edges_after_bilateral,
+        &participant_index,
+        &reduced_by_cycle_pairs,
+    )?;
     let reduced_after_cycle = apply_pda_offsets(&reduced_after_bilateral, &cycle_by_pda)?;
     let edges_for_mcmf = sorted_edges(&reduced_after_cycle);
 
-    let (total_flow, total_cost, unmet_demand, mcmf_by_pda): (u64, i128, u64, HashMap<Pubkey, u64>) =
-        if edges_for_mcmf.is_empty() {
-            (0, 0, total_positive_net, HashMap::new())
-        } else {
-            let mut graph = FlowGraph::new(node_count);
-            for (idx, value) in net.iter().enumerate() {
-                if *value < 0 {
-                    graph.add_arc(source, idx, -*value, 0);
-                } else if *value > 0 {
-                    graph.add_arc(idx, sink, *value, 0);
-                }
+    let (total_flow, total_cost, unmet_demand, mcmf_by_pda): (
+        u64,
+        i128,
+        u64,
+        HashMap<Pubkey, u64>,
+    ) = if edges_for_mcmf.is_empty() {
+        (0, 0, total_positive_net, HashMap::new())
+    } else {
+        let mut graph = FlowGraph::new(node_count);
+        for (idx, value) in net.iter().enumerate() {
+            if *value < 0 {
+                graph.add_arc(source, idx, -*value, 0);
+            } else if *value > 0 {
+                graph.add_arc(idx, sink, *value, 0);
             }
+        }
 
-            let e_count = edges_for_mcmf.len() as i128;
-            let v_count = participants.len() as i128;
-            let base_cost = e_count
-                .checked_mul(v_count + 1)
-                .and_then(|v| v.checked_add(1))
-                .unwrap_or(1);
+        let e_count = edges_for_mcmf.len() as i128;
+        let v_count = participants.len() as i128;
+        let base_cost = e_count
+            .checked_mul(v_count + 1)
+            .and_then(|v| v.checked_add(1))
+            .unwrap_or(1);
 
-            let mut obligation_arc_positions: Vec<(Pubkey, usize, usize)> =
-                Vec::with_capacity(edges_for_mcmf.len());
-            for e in &edges_for_mcmf {
-                let from_idx = *participant_index.get(&e.from)?;
-                let to_idx = *participant_index.get(&e.to)?;
-                let epsilon = obligation_arc_positions.len() as W;
-                let cost = base_cost + epsilon;
-                let pos = graph.edges[from_idx].len();
-                graph.add_arc(from_idx, to_idx, F::from(e.amount), cost);
-                obligation_arc_positions.push((e.pda, from_idx, pos));
+        let mut obligation_arc_positions: Vec<(Pubkey, usize, usize)> =
+            Vec::with_capacity(edges_for_mcmf.len());
+        for e in &edges_for_mcmf {
+            let from_idx = *participant_index.get(&e.from)?;
+            let to_idx = *participant_index.get(&e.to)?;
+            let epsilon = obligation_arc_positions.len() as W;
+            let cost = base_cost + epsilon;
+            let pos = graph.edges[from_idx].len();
+            graph.add_arc(from_idx, to_idx, F::from(e.amount), cost);
+            obligation_arc_positions.push((e.pda, from_idx, pos));
+        }
+        let (total_flow_raw, total_cost_raw) = Mcmf::new(&mut graph, source, sink).run();
+        let total_flow: u64 = total_flow_raw.try_into().ok()?;
+        let total_cost: i128 = total_cost_raw;
+
+        let mut mcmf_by_pda: HashMap<Pubkey, u64> = HashMap::new();
+        for (pda, from_idx, pos) in obligation_arc_positions {
+            let e = graph.edges[from_idx][pos];
+            let used: u64 = e.f.try_into().ok()?;
+            if used == 0 {
+                continue;
             }
-            let (total_flow_raw, total_cost_raw) = Mcmf::new(&mut graph, source, sink).run();
-            let total_flow: u64 = total_flow_raw.try_into().ok()?;
-            let total_cost: i128 = total_cost_raw;
-
-            let mut mcmf_by_pda: HashMap<Pubkey, u64> = HashMap::new();
-            for (pda, from_idx, pos) in obligation_arc_positions {
-                let e = graph.edges[from_idx][pos];
-                let used: u64 = e.f.try_into().ok()?;
-                if used == 0 {
-                    continue;
-                }
-                *mcmf_by_pda.entry(pda).or_insert(0) += used;
-            }
-            let unmet_demand = total_positive_net.saturating_sub(total_flow);
-            (total_flow, total_cost, unmet_demand, mcmf_by_pda)
-        };
+            *mcmf_by_pda.entry(pda).or_insert(0) += used;
+        }
+        let unmet_demand = total_positive_net.saturating_sub(total_flow);
+        (total_flow, total_cost, unmet_demand, mcmf_by_pda)
+    };
 
     let external_settlements = build_external_settlements_from_net(&net, &participants)?;
 
@@ -711,11 +611,7 @@ mod tests {
         let p1 = Pubkey::from_str("Stake11111111111111111111111111111111111111").expect("pk");
         let p2 = Pubkey::from_str("Vote111111111111111111111111111111111111111").expect("pk");
         let p3 = Pubkey::from_str("Config1111111111111111111111111111111111111").expect("pk");
-        let obligations = vec![
-            (p1, ob(a, b, 7)),
-            (p2, ob(b, c, 5)),
-            (p3, ob(c, a, 4)),
-        ];
+        let obligations = vec![(p1, ob(a, b, 7)), (p2, ob(b, c, 5)), (p3, ob(c, a, 4))];
         let r1 = solve_min_cost_flow(&obligations).expect("solve");
         let r2 = solve_min_cost_flow(&obligations).expect("solve");
         assert_eq!(r1.total_flow, r2.total_flow);
@@ -750,7 +646,11 @@ mod tests {
         let p_ab = Pubkey::from_str("Stake11111111111111111111111111111111111111").expect("pk");
         let p_bc = Pubkey::from_str("Vote111111111111111111111111111111111111111").expect("pk");
         let p_ca = Pubkey::from_str("Config1111111111111111111111111111111111111").expect("pk");
-        let obligations = vec![(p_ab, ob(a, b, 1)), (p_bc, ob(b, c, 1)), (p_ca, ob(c, a, 1))];
+        let obligations = vec![
+            (p_ab, ob(a, b, 1)),
+            (p_bc, ob(b, c, 1)),
+            (p_ca, ob(c, a, 1)),
+        ];
 
         let result = solve_min_cost_flow(&obligations).expect("solve");
         assert!(result.external_settlements.is_empty());

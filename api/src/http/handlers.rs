@@ -1,35 +1,23 @@
+//! Обработчики Actix: клиринг, обязательства, участники, аудит.
+
+use super::models::{
+    AdminSignedRequest, ApiResponse, AppMetrics, DbClearingSessionRow, DbObligationRecord,
+    DbParticipantRecord,
+};
 use crate::{
-    auth_service::verify,
-    cron_worker::{WorkerCommand, WorkerState},
-    models::*,
+    auth::verify,
+    worker::{WorkerCommand, WorkerState},
 };
 use actix_web::{web, HttpResponse, Responder};
 use chrono::Utc;
 use sqlx::PgPool;
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
 };
 use tokio::sync::{mpsc, oneshot};
 
 const ADMIN_REQUEST_TTL_SECONDS: i64 = 300;
-
-pub struct AppMetrics {
-    pub clearing_requests_total: AtomicU64,
-    pub admin_auth_failures_total: AtomicU64,
-}
-
-impl AppMetrics {
-    pub fn new() -> Self {
-        Self {
-            clearing_requests_total: AtomicU64::new(0),
-            admin_auth_failures_total: AtomicU64::new(0),
-        }
-    }
-}
 
 async fn verify_admin_request(
     admin_pubkey: &str,
@@ -198,9 +186,7 @@ pub async fn get_obligations_by_wallet(
     }
 }
 
-pub async fn get_all_obligations(
-    db_pool: web::Data<PgPool>,
-) -> impl Responder {
+pub async fn get_all_obligations(db_pool: web::Data<PgPool>) -> impl Responder {
     let rows = sqlx::query_as::<_, DbObligationRecord>(
         r#"
         SELECT
@@ -271,9 +257,8 @@ pub async fn get_participant_by_authority(
 
     match row {
         Ok(Some(data)) => HttpResponse::Ok().json(ApiResponse::success(data)),
-        Ok(None) => {
-            HttpResponse::NotFound().json(ApiResponse::<String>::error("participant not found".into()))
-        }
+        Ok(None) => HttpResponse::NotFound()
+            .json(ApiResponse::<String>::error("participant not found".into())),
         Err(err) => {
             tracing::error!("Failed to fetch participant from DB: {err:?}");
             HttpResponse::InternalServerError()
@@ -333,9 +318,7 @@ pub async fn get_last_clearing_audit_for_wallet(
 
     let matched: HashSet<String> = matching.into_iter().collect();
     let mut filtered = result.clone();
-    filtered
-        .data
-        .retain(|x| x.from == wallet || x.to == wallet);
+    filtered.data.retain(|x| x.from == wallet || x.to == wallet);
     filtered
         .internal_data
         .retain(|x| matched.contains(&x.obligation));
@@ -391,7 +374,9 @@ pub async fn get_clearing_session_payload(
     .await
     {
         Ok(Some(payload)) => HttpResponse::Ok().json(ApiResponse::success(payload)),
-        Ok(None) => HttpResponse::NotFound().json(ApiResponse::<String>::error("session not found".into())),
+        Ok(None) => {
+            HttpResponse::NotFound().json(ApiResponse::<String>::error("session not found".into()))
+        }
         Err(err) => {
             tracing::error!("Failed to fetch session payload: {err:?}");
             HttpResponse::InternalServerError()
