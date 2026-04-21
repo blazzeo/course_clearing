@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use sha2::{Digest, Sha256};
 
-declare_id!("BNX6hQwS6qsF7o91ve3mEjLzQU7W276yvZUwgMfscn5t");
+declare_id!("GrnuHzDD5kSUKcDQyJaKpN17TJPyRMHiUbUr4QewYmhd");
 const DAY_SECONDS_I64: i64 = 86_400;
 
 #[program]
