@@ -5,6 +5,7 @@ import { getClearingSessionPayload, listClearingSessions } from "../api";
 import { ClearingAuditResult, ClearingSessionSummary } from "../interfaces";
 import { API_URL } from "../main";
 import SessionVisualization from "../components/SessionVisualization";
+import { obligationStatusFromApiToRu } from "../statusLabels";
 
 const shortKey = (value?: string | null) => {
     if (!value) return "n/a";
@@ -37,7 +38,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
                 <details>
                     <summary style={{ cursor: "pointer" }}>Входные обязательства ({audit.input_obligations.length})</summary>
                     <table style={{ width: "100%", marginTop: "6px", borderCollapse: "collapse" }}>
-                        <thead><tr><th>Obligation</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Обязательство</th><th>От</th><th>Кому</th><th>Сумма</th><th>Статус</th></tr></thead>
                         <tbody>
                             {audit.input_obligations.map((x) => (
                                 <tr key={x.obligation}>
@@ -45,7 +46,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
                                     <td>{shortKey(x.from)}</td>
                                     <td>{shortKey(x.to)}</td>
                                     <td>{fmtSol(x.amount)}</td>
-                                    <td>{x.status}</td>
+                                    <td>{obligationStatusFromApiToRu(x.status)}</td>
                                 </tr>
                             ))}
                         </tbody>

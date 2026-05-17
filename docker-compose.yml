@@ -80,7 +80,6 @@ services:
     volumes:
       - ./clearing_solana:/app
       - anchor-data:/app/target
-    # command: ["sh", "-c", "anchor keys sync && anchor build"]
     restart: "no"
     profiles:
       - dev
@@ -98,34 +97,6 @@ services:
       ADMIN_SECRET_KEY_JSON: ${ADMIN_SECRET_KEY_JSON:-}
       AIRDROP_ADDRESSES: ${AIRDROP_ADDRESSES:-}
       AIRDROP_SOL: ${AIRDROP_SOL:-2}
-    command: >
-      sh -c '
-      export PATH="/root/.local/share/solana/install/active_release/bin:$$PATH" &&
-      mkdir -p /root/.config/solana &&
-      if [ -n "$$ADMIN_SECRET_KEY_JSON" ]; then
-        echo "$$ADMIN_SECRET_KEY_JSON" > /root/.config/solana/id.json;
-      else
-        solana-keygen new --force --no-bip39-passphrase --silent -o /root/.config/solana/id.json;
-      fi &&
-      solana config set --url "$$SOLANA_URL" --keypair /root/.config/solana/id.json &&
-      until solana leader-schedule -u "$$SOLANA_URL" >/dev/null 2>&1; do
-        echo "Waiting for validator leader schedule...";
-        sleep 2;
-      done &&
-      solana airdrop 200 "$(solana-keygen pubkey /root/.config/solana/id.json)" || true &&
-      anchor build &&
-      anchor deploy --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json -- --use-rpc &&
-      if [ -f migrations/deploy.ts ]; then
-        anchor migrate --provider.cluster "$$SOLANA_URL" --provider.wallet /root/.config/solana/id.json;
-      else
-        echo "migrations/deploy.ts not found, skipping anchor migrate";
-      fi &&
-      npm install &&
-      ANCHOR_PROVIDER_URL="$$SOLANA_URL" ANCHOR_WALLET=/root/.config/solana/id.json npx ts-node scripts/init.ts &&
-      cp target/idl/clearing_solana.json /frontend-src/clearing_solana.json &&
-      cp target/types/clearing_solana.ts /frontend-src/clearing_solana.ts &&
-      echo "Anchor bootstrap completed (build/deploy/migrate/init + frontend IDL sync)."
-      '
     volumes:
       - ./clearing_solana:/app
       - ./frontend/src:/frontend-src
@@ -142,7 +113,6 @@ services:
   localnet:
     image: solanalabs/solana:v1.18.26
     container_name: localnet
-    # 0.0.0.0 — иначе RPC из других контейнеров и с хоста не достучаться.
     command: >
       solana-test-validator --reset --ledger /ledger
       --rpc-port 8899 --dynamic-port-range 8900-8999

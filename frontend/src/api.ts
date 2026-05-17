@@ -613,6 +613,19 @@ export async function withdrawFee(program: Program<ClearingSolana>, amount: numb
         .rpc();
 }
 
+/** Однократное создание PDA escrow под комиссии (плательщик rent — кошелёк администратора). Только для admin participant. */
+export async function initEscrow(program: Program<ClearingSolana>) {
+    const authority = program.provider.publicKey;
+    if (!authority) throw new Error("Wallet not connected");
+
+    return await program.methods
+        .initEscrow()
+        .accounts({
+            authority,
+        })
+        .rpc();
+}
+
 export async function payFee(program: Program<ClearingSolana>, session_id: number, creditor: PublicKey) {
     const authority = program.provider.publicKey;
     if (!authority) throw new Error("Wallet not connected");
@@ -1174,35 +1187,75 @@ export async function getAllBills(
     return bills
 }
 
+const NET_POSITION_ACCOUNT_SIZE = 98; // 8 discriminator + NetPosition::LEN(90)
+/** Смещение debitor Pubkey в raw account data (с дискриминатором). */
+const NET_POSITION_DEBITOR_OFFSET = 49; // 8 + 1 status + 8 session_id + 32 creditor
+/** Смещение creditor Pubkey в raw account data (с дискриминатором). */
+const NET_POSITION_CREDITOR_OFFSET = 17; // 8 + 1 status + 8 session_id
+
+function mapNetPositionAccount(publicKey: PublicKey, account: {
+    status: AnchorEnum;
+    sessionId: BNLike;
+    creditor: PublicKey;
+    debitor: PublicKey;
+    netAmount: BNLike;
+    feeAmount: BNLike;
+}): Bill {
+    return {
+        pda: publicKey,
+        status: parseNetPositionStatus(account.status as AnchorEnum),
+        session_id: safeBN(account.sessionId),
+        creditor: account.creditor,
+        debitor: account.debitor,
+        net_amount: safeBN(account.netAmount),
+        fee_amount: safeBN(account.feeAmount),
+    };
+}
+
+/** Счета, где участник — должник (сам должен кредитору). */
 export async function getBillsByParticipant(
     program: Program<ClearingSolana>,
     pubkey: PublicKey
 ): Promise<Bill[]> {
     const pubkeyBase58 = pubkey.toBase58();
-    const DEBITOR_OFFSET = 49; // 8 discriminator + 1 status + 8 session_id + 32 creditor
-    const NET_POSITION_ACCOUNT_SIZE = 98; // 8 discriminator + NetPosition::LEN(90)
     const byDebitor = await program.account.netPosition.all([
         {
             dataSize: NET_POSITION_ACCOUNT_SIZE,
         },
         {
             memcmp: {
-                offset: DEBITOR_OFFSET,
+                offset: NET_POSITION_DEBITOR_OFFSET,
                 bytes: pubkeyBase58,
             },
         },
     ], "confirmed");
 
     return byDebitor
-        .map(({ account, publicKey }) => ({
-            pda: publicKey,
-            status: parseNetPositionStatus(account.status as AnchorEnum),
-            session_id: safeBN(account.sessionId),
-            creditor: account.creditor,
-            debitor: account.debitor,
-            net_amount: safeBN(account.netAmount),
-            fee_amount: safeBN(account.feeAmount),
-        }))
+        .map(({ account, publicKey }) => mapNetPositionAccount(publicKey, account))
         .filter((b) => b.debitor.equals(pubkey) && b.net_amount > 0)
+        .sort((a, b) => b.session_id - a.session_id);
+}
+
+/** Счета, где участник — кредитор (контрагент должен ему). */
+export async function getBillsAsCreditorByParticipant(
+    program: Program<ClearingSolana>,
+    pubkey: PublicKey
+): Promise<Bill[]> {
+    const pubkeyBase58 = pubkey.toBase58();
+    const byCreditor = await program.account.netPosition.all([
+        {
+            dataSize: NET_POSITION_ACCOUNT_SIZE,
+        },
+        {
+            memcmp: {
+                offset: NET_POSITION_CREDITOR_OFFSET,
+                bytes: pubkeyBase58,
+            },
+        },
+    ], "confirmed");
+
+    return byCreditor
+        .map(({ account, publicKey }) => mapNetPositionAccount(publicKey, account))
+        .filter((b) => b.creditor.equals(pubkey) && b.net_amount > 0)
         .sort((a, b) => b.session_id - a.session_id);
 }

@@ -22,6 +22,7 @@ async fn main() -> std::io::Result<()> {
         .init();
 
     let config = config::parse_env();
+    dbg!(&config);
 
     let db_pool = PgPoolOptions::new()
         .max_connections(10)

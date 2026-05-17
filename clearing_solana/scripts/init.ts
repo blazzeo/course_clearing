@@ -94,16 +94,6 @@ async function main() {
 	console.log(`Admin created: ${authority}`);
 
 	await program.methods
-		.initEscrow()
-		.accounts({
-			authority,
-		})
-		.signers([adminKeypair])
-		.rpc();
-
-	console.log("Escrow initialized");
-
-	await program.methods
 		.createPoolManager()
 		.accounts({
 			authority,

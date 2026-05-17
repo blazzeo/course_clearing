@@ -1,12 +1,7 @@
-# Тот же коммит clearing_solana, что и при anchor build в frontend/Dockerfile и clearing_solana/Dockerfile —
-# типы и layout аккаунтов в бэке совпадают с on-chain программой.
 FROM rust:1.91 as builder
 
 WORKDIR /app
 
-# Build with repository root as context:
-# - /app/api
-# - /app/clearing_solana
 COPY api ./api
 COPY clearing_solana ./clearing_solana
 
@@ -25,5 +20,3 @@ COPY --from=builder /app/api/target/release/clearing-api /app/clearing-api
 
 EXPOSE 3001
 CMD ["./clearing-api"]
-
-

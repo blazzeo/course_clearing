@@ -2,6 +2,7 @@
 use dotenv::dotenv;
 use std::env;
 
+#[derive(Debug)]
 pub struct Config {
     pub solana_rpc_url: String,
     pub solana_ws_url: String,
