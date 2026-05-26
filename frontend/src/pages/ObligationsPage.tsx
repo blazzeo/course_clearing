@@ -2,20 +2,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { cancelObligation, confirmObligation, declineObligation, getObligationsByParticipantFromDb, getObligationsByParticipantFromPools, useProgram } from '../api'
-import { Obligation, ObligationStatus } from '../interfaces'
+import { cancelObligation, confirmObligation, declineObligation, getObligationsByParticipantFromDb, getObligationsByParticipantFromPools, getParticipantsFromDb, useProgram } from '../api'
+import { Obligation, ObligationStatus, ParticipantDirectoryEntry } from '../interfaces'
 import { ClipLoader } from "react-spinners";
 import { API_URL } from '../main'
 
 export function MapObligationStatus(status: ObligationStatus) {
     switch (status) {
-        case ObligationStatus.All: return "All";
-        case ObligationStatus.Created: return "Created";
+        case ObligationStatus.All: return "Все";
+        case ObligationStatus.Created: return "Создано";
         case ObligationStatus.Confirmed: return "В процессе";
-        case ObligationStatus.PartiallyNetted: return "PartiallyNetted";
-        case ObligationStatus.Declined: return "Declined";
-        case ObligationStatus.Netted: return "Netted";
-        case ObligationStatus.Cancelled: return "Cancelled";
+        case ObligationStatus.PartiallyNetted: return "Частично погашено";
+        case ObligationStatus.Declined: return "Отклонено";
+        case ObligationStatus.Netted: return "Погашено";
+        case ObligationStatus.Cancelled: return "Отменено";
     }
 }
 
@@ -29,6 +29,7 @@ function endOfLocalDaySec(isoDate: string): number {
 
 export default function ObligationsPage() {
     const [allObligations, setAllObligations] = useState<Obligation[]>([])
+    const [participantsDirectory, setParticipantsDirectory] = useState<ParticipantDirectoryEntry[]>([])
     const [loading, setLoading] = useState(true)
     const [filter, setFilter] = useState<ObligationStatus>(ObligationStatus.All)
     const [dateFrom, setDateFrom] = useState<string>('')
@@ -81,6 +82,13 @@ export default function ObligationsPage() {
         [groupedObligations, viewMode]
     )
 
+    const participantNameByAuthority = useMemo(() => {
+        return participantsDirectory.reduce<Record<string, string>>((acc, item) => {
+            acc[item.authority] = item.user_name
+            return acc
+        }, {})
+    }, [participantsDirectory])
+
     const loadPositions = async () => {
         if (!publicKey || !program) {
             return
@@ -94,6 +102,14 @@ export default function ObligationsPage() {
             } catch (dbError) {
                 console.warn('DB obligations fetch failed, fallback to on-chain scan', dbError)
                 obligations = await getObligationsByParticipantFromPools(program, publicKey)
+            }
+
+            try {
+                const directory = await getParticipantsFromDb(API_URL)
+                setParticipantsDirectory(directory)
+            } catch (participantsError) {
+                console.warn('Participants directory fetch failed', participantsError)
+                setParticipantsDirectory([])
             }
 
             setAllObligations(obligations)
@@ -228,10 +244,11 @@ export default function ObligationsPage() {
                         <thead>
                             <tr>
                                 <th>{isCreditorView ? 'Дебитор' : 'Кредитор'}</th>
-                                <th>Сумма (остаток / номинал)</th>
+                                <th>Имя</th>
+                                <th>Сумма</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
-                                <th>Опер. день расчёта</th>
+                                <th>Дата валютирования</th>
                                 <th>Действия</th>
                             </tr>
                         </thead>
@@ -245,6 +262,11 @@ export default function ObligationsPage() {
                                         >
                                             {(isCreditorView ? obligation.from : obligation.to).toBase58().slice(0, 8)}...
                                         </Link>
+                                    </td>
+                                    <td>
+                                        {participantNameByAuthority[
+                                            (isCreditorView ? obligation.from : obligation.to).toBase58()
+                                        ] || '-'}
                                     </td>
                                     <td>
                                         {obligation.originalAmount != null &&
@@ -400,11 +422,6 @@ export default function ObligationsPage() {
                         )}
                     </div>
                 </div>
-                <p style={{ fontSize: '13px', color: '#555', marginBottom: '16px', maxWidth: '720px' }}>
-                    Данные из API: в таблице по умолчанию показан <strong>остаток</strong> по обязательству (
-                    <code>remaining_amount</code>
-                    ). После клиринга он может стать <strong>0 SOL</strong>, при этом исходная сумма была ненулевой — смотрите колонку «Сумма» (остаток / номинал) и ответ в консоли браузера при загрузке страницы.
-                </p>
 
                 {loading ? (
                     <div style={{ display: 'flex', flexDirection: 'column', padding: "40px 0", alignItems: "center", justifyContent: "center" }}>

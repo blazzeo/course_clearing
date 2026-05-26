@@ -1179,8 +1179,20 @@ export async function getBillsByParticipant(
     pubkey: PublicKey
 ): Promise<Bill[]> {
     const pubkeyBase58 = pubkey.toBase58();
+    const CREDITOR_OFFSET = 17; // 8 discriminator + 1 status + 8 session_id
     const DEBITOR_OFFSET = 49; // 8 discriminator + 1 status + 8 session_id + 32 creditor
     const NET_POSITION_ACCOUNT_SIZE = 98; // 8 discriminator + NetPosition::LEN(90)
+    const byCreditor = await program.account.netPosition.all([
+        {
+            dataSize: NET_POSITION_ACCOUNT_SIZE,
+        },
+        {
+            memcmp: {
+                offset: CREDITOR_OFFSET,
+                bytes: pubkeyBase58,
+            },
+        },
+    ], "confirmed");
     const byDebitor = await program.account.netPosition.all([
         {
             dataSize: NET_POSITION_ACCOUNT_SIZE,
@@ -1193,8 +1205,10 @@ export async function getBillsByParticipant(
         },
     ], "confirmed");
 
-    return byDebitor
-        .map(({ account, publicKey }) => ({
+    const all = [...byCreditor, ...byDebitor];
+    const unique = new Map<string, Bill>();
+    all.forEach(({ account, publicKey }) => {
+        unique.set(publicKey.toBase58(), {
             pda: publicKey,
             status: parseNetPositionStatus(account.status as AnchorEnum),
             session_id: safeBN(account.sessionId),
@@ -1202,7 +1216,10 @@ export async function getBillsByParticipant(
             debitor: account.debitor,
             net_amount: safeBN(account.netAmount),
             fee_amount: safeBN(account.feeAmount),
-        }))
-        .filter((b) => b.debitor.equals(pubkey) && b.net_amount > 0)
+        });
+    });
+
+    return Array.from(unique.values())
+        .filter((b) => (b.debitor.equals(pubkey) || b.creditor.equals(pubkey)) && b.net_amount > 0)
         .sort((a, b) => b.session_id - a.session_id);
 }

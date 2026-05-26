@@ -7,7 +7,7 @@ import { API_URL } from "../main";
 import SessionVisualization from "../components/SessionVisualization";
 
 const shortKey = (value?: string | null) => {
-    if (!value) return "n/a";
+    if (!value) return "н/д";
     if (value.length <= 14) return value;
     return `${value.slice(0, 6)}...${value.slice(-6)}`;
 };
@@ -28,16 +28,16 @@ function renderSessionDetails(audit: ClearingAuditResult) {
     return (
         <div style={{ marginTop: "10px", fontSize: "13px", color: "#333", display: "grid", gap: "10px" }}>
             <div style={{ background: "#f8fafc", borderRadius: "6px", padding: "8px" }}>
-                <div><b>Result hash:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
-                <div><b>Merkle root:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
-                <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
+                <div><b>Хеш результата:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
+                <div><b>Корень Merkle:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
+                <div><b>Создано:</b> {fmtTs(audit.timestamp)}</div>
             </div>
 
             {!!audit.input_obligations?.length && (
                 <details>
                     <summary style={{ cursor: "pointer" }}>Входные обязательства ({audit.input_obligations.length})</summary>
                     <table style={{ width: "100%", marginTop: "6px", borderCollapse: "collapse" }}>
-                        <thead><tr><th>Obligation</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Обязательство</th><th>От</th><th>Кому</th><th>Сумма</th><th>Статус</th></tr></thead>
                         <tbody>
                             {audit.input_obligations.map((x) => (
                                 <tr key={x.obligation}>
@@ -54,7 +54,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             )}
 
             <details>
-                <summary style={{ cursor: "pointer" }}>External allocations ({audit.data.length})</summary>
+                <summary style={{ cursor: "pointer" }}>Внешние аллокации ({audit.data.length})</summary>
                 <ul>
                     {audit.data.map((x) => (
                         <li key={`ex-${x.from}-${x.to}-${x.amount}`}>
@@ -65,7 +65,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             </details>
 
             <details>
-                <summary style={{ cursor: "pointer" }}>Internal nettings ({audit.internal_data.length})</summary>
+                <summary style={{ cursor: "pointer" }}>Внутренние неттинги ({audit.internal_data.length})</summary>
                 <ul>
                     {audit.internal_data.map((x) => {
                         const applied = Number(x.flow_used ?? 0);
@@ -80,7 +80,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             </details>
 
             <details>
-                <summary style={{ cursor: "pointer" }}>Визуальный граф и Merkle tree</summary>
+                <summary style={{ cursor: "pointer" }}>Визуальный граф и дерево Merkle</summary>
                 <div style={{ marginTop: "8px" }}>
                     <SessionVisualization audit={audit} />
                 </div>
@@ -187,10 +187,10 @@ export default function UserSessionsPage() {
                                 onClick={() => toggleSession(s.session_id)}
                             >
                                 {openedSessionIds.has(s.session_id) ? "▼" : "▶"}{" "}
-                                Session #{s.session_id} | result: {s.result_id} | ext: {s.external_count}, int: {s.internal_count}
+                                Сессия #{s.session_id} | результат: {s.result_id} | внешние: {s.external_count}, внутренние: {s.internal_count}
                             </div>
                             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "4px" }}>
-                                created: {fmtTs(s.created_at)} | merkle: {shortKey(s.merkle_root || "n/a")}
+                                создано: {fmtTs(s.created_at)} | merkle: {shortKey(s.merkle_root || "н/д")}
                             </div>
                             {openedSessionIds.has(s.session_id) && expandedSessions[s.session_id] && renderSessionDetails(expandedSessions[s.session_id])}
                         </div>

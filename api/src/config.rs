@@ -1,7 +1,7 @@
 //! Загрузка конфигурации из переменных окружения.
-use dotenv::dotenv;
 use std::env;
 
+#[derive(Debug)]
 pub struct Config {
     pub solana_rpc_url: String,
     pub solana_ws_url: String,
@@ -12,7 +12,9 @@ pub struct Config {
 }
 
 pub fn parse_env() -> Config {
-    dotenv().ok();
+    if dotenv::dotenv().is_err() {
+        println!("ℹ️ .env file not found, using system environment variables.");
+    }
 
     let solana_rpc_url = env::var("SOLANA_RPC_URL").expect("SOLANA_RPC_URL env missing");
 

@@ -214,7 +214,7 @@ export default function CreateObligation() {
                     <div style={{ flexWrap: 'wrap', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
                             <label className="label">
-                                Выбрать пользователя из списка
+                                Выбрать контрагента из списка
                             </label>
                             <select
                                 className="input"
@@ -224,7 +224,7 @@ export default function CreateObligation() {
                                 style={{ flex: '1 1 550px', minWidth: '350px' }}
                             >
                                 <option value="">
-                                    {participantsLoading ? 'Загрузка пользователей...' : 'Выберите пользователя'}
+                                    {participantsLoading ? 'Загрузка контрагентов...' : 'Выберите контрагента'}
                                 </option>
                                 {availableParticipants.map((participant) => (
                                     <option key={participant.pda} value={participant.authority}>
@@ -330,21 +330,21 @@ export default function CreateObligation() {
                                 </div>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                Сколько
+                                Сколько (SOL)
                                 <input
                                     type="number"
                                     step="0.000000001"
                                     className="input"
                                     value={amount}
                                     onChange={(e) => setAmount(e.target.value)}
-                                    placeholder="SOL amount"
+                                    placeholder="Сумма в SOL"
                                     required
                                     min="0"
                                     style={{ width: '140px', margin: 0 }}
                                 />
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                Операционный день расчёта (не раньше)
+                                Дата валютирования (не раньше)
                                 <input
                                     type="date"
                                     className="input"

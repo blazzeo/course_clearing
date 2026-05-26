@@ -152,11 +152,11 @@ export default function AdminBillsPage() {
                     <table className="table">
                         <thead>
                             <tr>
-                                <th>Session</th>
-                                <th>Debitor</th>
-                                <th>Creditor</th>
-                                <th>Net</th>
-                                <th>Fee</th>
+                                <th>Сессия</th>
+                                <th>Дебитор</th>
+                                <th>Кредитор</th>
+                                <th>Сумма</th>
+                                <th>Комиссия</th>
                                 <th>Статус</th>
                             </tr>
                         </thead>

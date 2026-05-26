@@ -1,41 +1,94 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "react-toastify";
-import { getClearingSessionPayload, listClearingSessions } from "../api";
-import { ClearingAuditResult, ClearingSessionSummary } from "../interfaces";
+import { getClearingSessionPayload, getParticipantsFromDb, listClearingSessions } from "../api";
+import { ClearingAuditResult, ClearingSessionSummary, ParticipantDirectoryEntry } from "../interfaces";
 import { API_URL } from "../main";
 import SessionVisualization from "../components/SessionVisualization";
+import { sessionCounterpartiesWithNet } from "../utils/sessionSettlementNet";
 
 const shortKey = (value?: string | null) => {
-    if (!value) return "n/a";
+    if (!value) return "н/д";
     if (value.length <= 14) return value;
     return `${value.slice(0, 6)}...${value.slice(-6)}`;
 };
 const fmtSol = (lamports: number) => `${(lamports / 1e9).toFixed(4)} SOL`;
+const fmtSignedLamports = (lamports: number) => {
+    const sign = lamports > 0 ? "+" : lamports === 0 ? "" : "";
+    return `${sign}${lamports}`;
+};
 const fmtTs = (ts: number) => new Date(ts * 1000).toLocaleString("ru-RU");
 function csvEscape(value: string | number | null | undefined): string {
     const s = value == null ? "" : String(value);
     return `"${s.replace(/"/g, "\"\"")}"`;
 }
 
-function renderSessionDetails(audit: ClearingAuditResult) {
+function renderSessionDetails(
+    audit: ClearingAuditResult,
+    participantNameByAuthority: Record<string, string>,
+) {
+    const counterpartiesNet = sessionCounterpartiesWithNet(audit);
     return (
         <div style={{ marginTop: "10px", fontSize: "13px", color: "#333", display: "grid", gap: "10px" }}>
             <div style={{ background: "#f8fafc", borderRadius: "6px", padding: "8px" }}>
-                <div><b>Result hash:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
-                <div><b>Merkle root:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
-                <div><b>Solver:</b> {audit.solver_version || "n/a"} | <b>Build:</b> {audit.build_sha || "n/a"}</div>
-                {audit.fallback_reason ? <div><b>Fallback reason:</b> {audit.fallback_reason}</div> : null}
-                {audit.flow_objective ? <div><b>Flow objective:</b> {audit.flow_objective}</div> : null}
-                {audit.flow_total_cost != null ? <div><b>Flow total cost:</b> {audit.flow_total_cost}</div> : null}
-                {audit.flow_unmet_demand != null ? <div><b>Flow unmet demand:</b> {audit.flow_unmet_demand}</div> : null}
-                <div><b>Created:</b> {fmtTs(audit.timestamp)}</div>
+                <div><b>Хеш результата:</b> <span style={{ fontFamily: "monospace" }}>{audit.hash}</span></div>
+                <div><b>Корень Merkle:</b> <span style={{ fontFamily: "monospace" }}>{audit.merkle_root || "-"}</span></div>
+                <div><b>Решатель:</b> {audit.solver_version || "н/д"} | <b>Сборка:</b> {audit.build_sha || "н/д"}</div>
+                {audit.fallback_reason ? <div><b>Причина fallback:</b> {audit.fallback_reason}</div> : null}
+                {audit.flow_objective ? <div><b>Цель flow:</b> {audit.flow_objective}</div> : null}
+                {audit.flow_total_cost != null ? <div><b>Суммарная стоимость flow:</b> {audit.flow_total_cost}</div> : null}
+                {audit.flow_unmet_demand != null ? <div><b>Непокрытый спрос flow:</b> {audit.flow_unmet_demand}</div> : null}
+                <div><b>Создано:</b> {fmtTs(audit.timestamp)}</div>
+            </div>
+
+            <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "10px", background: "#fff" }}>
+                <div style={{ fontWeight: 600, marginBottom: "8px", color: "#0f172a" }}>
+                    Контрагенты сессии и нетто по расчёту
+                </div>
+                <p style={{ margin: "0 0 8px 0", color: "#64748b", fontSize: "12px" }}>
+                    Нетто: входящие минус исходящие только по внешним аллокациям (реальные платежи между контрагентами). Положительное — получатель, отрицательное — платящий.
+                </p>
+                {counterpartiesNet.length === 0 ? (
+                    <span style={{ color: "#64748b" }}>Нет участников во входном снимке обязательств</span>
+                ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                        <thead>
+                            <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
+                                <th style={{ padding: "6px 4px" }}>Участник</th>
+                                <th style={{ padding: "6px 4px" }}>Имя</th>
+                                <th style={{ padding: "6px 4px" }}>Нетто (SOL)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {counterpartiesNet.map(({ pubkey, net }) => (
+                                <tr key={pubkey} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                    <td style={{ padding: "6px 4px", fontFamily: "monospace" }}>
+                                        <span title={pubkey}>{shortKey(pubkey)}</span>
+                                    </td>
+                                    <td style={{ padding: "6px 4px" }}>
+                                        {participantNameByAuthority[pubkey] || "-"}
+                                    </td>
+                                    <td
+                                        style={{
+                                            padding: "6px 4px",
+                                            color: net > 0 ? "#166534" : net < 0 ? "#b91c1c" : "#64748b",
+                                        }}
+                                    >
+                                        {net === 0
+                                            ? "0 SOL"
+                                            : `${net > 0 ? "+" : ""}${(net / 1e9).toFixed(4)} SOL`}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
             </div>
 
             {!!audit.input_obligations?.length && (
                 <details>
                     <summary style={{ cursor: "pointer" }}>Входные обязательства ({audit.input_obligations.length})</summary>
                     <table style={{ width: "100%", marginTop: "6px", borderCollapse: "collapse" }}>
-                        <thead><tr><th>Obligation</th><th>From</th><th>To</th><th>Amount</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Обязательство</th><th>От</th><th>Кому</th><th>Сумма</th><th>Статус</th></tr></thead>
                         <tbody>
                             {audit.input_obligations.map((x) => (
                                 <tr key={x.obligation}>
@@ -52,7 +105,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             )}
 
             <details>
-                <summary style={{ cursor: "pointer" }}>External allocations ({audit.data.length})</summary>
+                <summary style={{ cursor: "pointer" }}>Внешние аллокации ({audit.data.length})</summary>
                 <ul>
                     {audit.data.map((x) => (
                         <li key={`ex-${x.from}-${x.to}-${x.amount}`}>
@@ -63,7 +116,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             </details>
 
             <details>
-                <summary style={{ cursor: "pointer" }}>Internal nettings ({audit.internal_data.length})</summary>
+                <summary style={{ cursor: "pointer" }}>Внутренние неттинги ({audit.internal_data.length})</summary>
                 <ul>
                     {audit.internal_data.map((x) => {
                         const applied = Number(x.flow_used ?? 0);
@@ -82,7 +135,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             </details>
 
             <details>
-                <summary style={{ cursor: "pointer" }}>Audit timeline ({audit.audit_log.length})</summary>
+                <summary style={{ cursor: "pointer" }}>Хронология аудита ({audit.audit_log.length})</summary>
                 <ul>
                     {audit.audit_log.map((entry, idx) => (
                         <li key={`${entry.step}-${idx}`}>
@@ -93,7 +146,7 @@ function renderSessionDetails(audit: ClearingAuditResult) {
             </details>
 
             <details>
-                <summary style={{ cursor: "pointer" }}>Визуальный граф и Merkle tree</summary>
+                <summary style={{ cursor: "pointer" }}>Визуальный граф и дерево Merkle</summary>
                 <div style={{ marginTop: "8px" }}>
                     <SessionVisualization audit={audit} />
                 </div>
@@ -112,7 +165,15 @@ export default function AdminSessionsPage() {
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [page, setPage] = useState(1);
+    const [participantsDirectory, setParticipantsDirectory] = useState<ParticipantDirectoryEntry[]>([]);
     const PAGE_SIZE = 10;
+
+    const participantNameByAuthority = useMemo(() => {
+        return participantsDirectory.reduce<Record<string, string>>((acc, participant) => {
+            acc[participant.authority] = participant.user_name;
+            return acc;
+        }, {});
+    }, [participantsDirectory]);
 
     const loadSessions = async () => {
         try {
@@ -170,6 +231,18 @@ export default function AdminSessionsPage() {
     }, []);
 
     useEffect(() => {
+        const loadParticipants = async () => {
+            try {
+                setParticipantsDirectory(await getParticipantsFromDb(API_URL));
+            } catch (error) {
+                console.error("Error loading participants:", error);
+                setParticipantsDirectory([]);
+            }
+        };
+        loadParticipants();
+    }, []);
+
+    useEffect(() => {
         setPage(1);
     }, [walletFilter, statusFilter, dateFrom, dateTo]);
 
@@ -188,7 +261,7 @@ export default function AdminSessionsPage() {
                     const payload = await ensurePayloadLoaded(s.session_id);
                     const haystack = [
                         ...(payload.input_obligations?.flatMap((o) => [o.obligation, o.from, o.to]) || []),
-                        ...payload.data.map((x) => x.obligation),
+                        ...(payload.data || []).flatMap((x) => [x.from, x.to]),
                         ...payload.internal_data.map((x) => x.obligation),
                     ].join(" ");
                     if (haystack.includes(w)) matched.add(s.session_id);
@@ -261,7 +334,7 @@ export default function AdminSessionsPage() {
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
                 <input
                     className="input"
-                    placeholder="Фильтр по кошельку/obligation (в payload)"
+                    placeholder="Фильтр по кошельку/обязательству (в payload)"
                     value={walletFilter}
                     onChange={(e) => setWalletFilter(e.target.value)}
                     style={{ minWidth: "300px" }}
@@ -272,8 +345,8 @@ export default function AdminSessionsPage() {
                     onChange={(e) => setStatusFilter(e.target.value as "all" | "has_external" | "has_internal" | "empty")}
                 >
                     <option value="all">Все</option>
-                    <option value="has_external">Есть external</option>
-                    <option value="has_internal">Есть internal</option>
+                    <option value="has_external">Есть внешние</option>
+                    <option value="has_internal">Есть внутренние</option>
                     <option value="empty">Пустые</option>
                 </select>
                 <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
@@ -305,12 +378,14 @@ export default function AdminSessionsPage() {
                                 }}
                             >
                                 {openedSessionIds.has(s.session_id) ? "▼" : "▶"}{" "}
-                                Session #{s.session_id} | result: {s.result_id} | ext: {s.external_count}, int: {s.internal_count}
+                                Сессия #{s.session_id} | результат: {s.result_id} | внешние: {s.external_count}, внутренние: {s.internal_count}
                             </div>
                             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "4px" }}>
-                                created: {fmtTs(s.created_at)} | merkle: {shortKey(s.merkle_root || "n/a")}
+                                создано: {fmtTs(s.created_at)} | merkle: {shortKey(s.merkle_root || "н/д")}
                             </div>
-                            {openedSessionIds.has(s.session_id) && expandedSessions[s.session_id] && renderSessionDetails(expandedSessions[s.session_id])}
+                            {openedSessionIds.has(s.session_id) &&
+                                expandedSessions[s.session_id] &&
+                                renderSessionDetails(expandedSessions[s.session_id], participantNameByAuthority)}
                         </div>
                     ))}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px" }}>

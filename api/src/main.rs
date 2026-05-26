@@ -5,11 +5,10 @@ mod indexer;
 mod solver;
 mod worker;
 
-use crate::http::{init_web_server, models::WebServerContext};
+use http::models::WebServerContext;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tracing_subscriber::{fmt, EnvFilter};
 use worker::{Worker, WorkerState};
 
@@ -23,7 +22,9 @@ async fn main() -> std::io::Result<()> {
 
     let config = config::parse_env();
 
-    let db_pool = PgPoolOptions::new()
+    dbg!(&config);
+
+    let db_pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
         .connect(&config.database_url)
         .await
@@ -40,7 +41,7 @@ async fn main() -> std::io::Result<()> {
             .await
             .expect("Can't init worker state"),
     ));
-    let (sender, receiver) = mpsc::channel(10);
+    let (sender, receiver) = tokio::sync::mpsc::channel(10);
     Worker::new(worker_state.clone(), receiver).start();
 
     let sender = Arc::new(sender);
@@ -62,5 +63,5 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Starting API server on port {}", config.port);
     tracing::info!("Solana RPC URL: {}", config.solana_rpc_url);
 
-    init_web_server(context, config.frontend_origin, config.port).await
+    http::init_web_server(context, config.frontend_origin, config.port).await
 }

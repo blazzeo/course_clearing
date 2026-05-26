@@ -132,7 +132,7 @@ export default function AdminObligationsPage() {
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
                 <input
                     className="input"
-                    placeholder="Фильтр по кошельку (from/to)"
+                    placeholder="Фильтр по кошельку (от/кому)"
                     value={walletFilter}
                     onChange={(e) => setWalletFilter(e.target.value)}
                     style={{ minWidth: "260px" }}
@@ -144,12 +144,12 @@ export default function AdminObligationsPage() {
                     style={{ minWidth: "220px" }}
                 >
                     <option value={ObligationStatus.All}>Все статусы</option>
-                    <option value={ObligationStatus.Created}>Created</option>
-                    <option value={ObligationStatus.Confirmed}>Confirmed</option>
-                    <option value={ObligationStatus.PartiallyNetted}>PartiallyNetted</option>
-                    <option value={ObligationStatus.Netted}>Netted</option>
-                    <option value={ObligationStatus.Declined}>Declined</option>
-                    <option value={ObligationStatus.Cancelled}>Cancelled</option>
+                    <option value={ObligationStatus.Created}>Создано</option>
+                    <option value={ObligationStatus.Confirmed}>Подтверждено</option>
+                    <option value={ObligationStatus.PartiallyNetted}>Частично погашено</option>
+                    <option value={ObligationStatus.Netted}>Погашено</option>
+                    <option value={ObligationStatus.Declined}>Отклонено</option>
+                    <option value={ObligationStatus.Cancelled}>Отменено</option>
                 </select>
                 <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
                 <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
@@ -164,12 +164,12 @@ export default function AdminObligationsPage() {
                     <table className="table">
                         <thead>
                             <tr>
-                                <th>Debitor</th>
-                                <th>Creditor</th>
+                                <th>Дебитор</th>
+                                <th>Кредитор</th>
                                 <th>Сумма (остаток / номинал)</th>
                                 <th>Статус</th>
                                 <th>Создано</th>
-                                <th>Опер. день расчета</th>
+                                <th>Дата валютирования</th>
                             </tr>
                         </thead>
                         <tbody>

@@ -29,10 +29,10 @@ export class ErrorBoundary extends Component<Props, State> {
         if (this.state.hasError) {
             return this.props.fallback || (
                 <div style={{ padding: '20px', color: 'red' }}>
-                    <h2>Something went wrong</h2>
+                    <h2>Что-то пошло не так</h2>
                     <pre>{this.state.error?.message}</pre>
                     <details>
-                        <summary>Stack trace</summary>
+                        <summary>Трассировка стека</summary>
                         <pre>{this.state.error?.stack}</pre>
                     </details>
                 </div>

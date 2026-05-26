@@ -126,10 +126,10 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                 <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
                         <Link to="/" style={{ fontSize: '24px', fontWeight: 'bold', textDecoration: 'none', color: '#667eea' }}>
-                            Clearing Service
+                            Клиринговый сервис
                             {userType === UserType.Administator &&
                                 <p style={{ fontSize: '18px', color: '#ff2f00' }}>
-                                    Admin
+                                    Админ
                                 </p>
                             }
                         </Link>
@@ -259,7 +259,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                             color: 'var(--error-color, #f44336)',
                                         }}
                                     >
-                                        Not Connected
+                                        Не подключен
                                     </span>
                             }
                             <span

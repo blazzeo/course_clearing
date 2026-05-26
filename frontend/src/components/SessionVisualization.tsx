@@ -297,7 +297,7 @@ export default function SessionVisualization({ audit }: { audit: ClearingAuditRe
                                 setPan({ x: 0, y: 0 });
                             }}
                         >
-                            Reset
+                            Сброс
                         </button>
                         <span style={{ fontSize: "12px", color: "#64748b" }}>Масштаб: {(zoom * 100).toFixed(0)}%</span>
                     </div>
@@ -412,12 +412,12 @@ export default function SessionVisualization({ audit }: { audit: ClearingAuditRe
                     ) : (
                         <div style={{ display: "grid", gap: "6px", fontSize: "13px" }}>
                             <div><b>Кошелек:</b> {hoveredNode}</div>
-                            <div><b>Input incoming:</b> {fmtSol(impact.inputIncoming)}</div>
-                            <div><b>Input outgoing:</b> {fmtSol(impact.inputOutgoing)}</div>
-                            <div><b>Input net:</b> <span style={{ color: impact.inputIncoming - impact.inputOutgoing >= 0 ? "#166534" : "#b91c1c" }}>{fmtSol(impact.inputIncoming - impact.inputOutgoing)}</span></div>
-                            <div style={{ marginTop: "6px" }}><b>Settlement incoming:</b> {fmtSol(impact.settlementIncoming)}</div>
-                            <div><b>Settlement outgoing:</b> {fmtSol(impact.settlementOutgoing)}</div>
-                            <div><b>Settlement net:</b> <span style={{ color: impact.settlementIncoming - impact.settlementOutgoing >= 0 ? "#166534" : "#b91c1c" }}>{fmtSol(impact.settlementIncoming - impact.settlementOutgoing)}</span></div>
+                            <div><b>L1 входящий:</b> {fmtSol(impact.inputIncoming)}</div>
+                            <div><b>L1 исходящий:</b> {fmtSol(impact.inputOutgoing)}</div>
+                            <div><b>L1 нетто:</b> <span style={{ color: impact.inputIncoming - impact.inputOutgoing >= 0 ? "#166534" : "#b91c1c" }}>{fmtSol(impact.inputIncoming - impact.inputOutgoing)}</span></div>
+                            <div style={{ marginTop: "6px" }}><b>L2 входящий:</b> {fmtSol(impact.settlementIncoming)}</div>
+                            <div><b>L2 исходящий:</b> {fmtSol(impact.settlementOutgoing)}</div>
+                            <div><b>L2 нетто:</b> <span style={{ color: impact.settlementIncoming - impact.settlementOutgoing >= 0 ? "#166534" : "#b91c1c" }}>{fmtSol(impact.settlementIncoming - impact.settlementOutgoing)}</span></div>
                         </div>
                     )}
                     <div style={{ marginTop: "12px", fontSize: "12px", color: "#334155" }}>
@@ -430,7 +430,7 @@ export default function SessionVisualization({ audit }: { audit: ClearingAuditRe
             </div>
 
             <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "10px", background: "#fff" }}>
-                <div style={{ fontWeight: 600, marginBottom: "8px" }}>Merkle tree</div>
+                <div style={{ fontWeight: 600, marginBottom: "8px" }}>Дерево Merkle</div>
                 {!audit.merkle_leaves?.length ? (
                     <div style={{ color: "#64748b" }}>Листьев нет: для этой сессии не было применяемых операций.</div>
                 ) : (

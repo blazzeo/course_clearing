@@ -97,7 +97,7 @@ export default function Profile() {
             }
             // 2. Проверка на отклонение транзакции пользователем (в Phantom/Solflare)
             else if (errorMessage.includes("User rejected the request")) {
-                toast.info("Транзакция отклонена пользователем");
+                toast.info("Транзакция отклонена контрагентом");
             }
             // 3. Проверка на недостаточность средств для конкретной суммы (если аккаунт не пустой, но денег мало)
             else if (errorMessage.includes("insufficient funds")) {

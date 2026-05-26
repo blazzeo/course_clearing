@@ -1,6 +1,7 @@
 //! Реализация воркера клиринга (очередь, Solana, БД, решатель).
 
 use crate::solver::{solve_min_cost_flow, ExternalSettlement, InternalNetting};
+use anyhow::Context;
 use anchor_lang::AccountDeserialize;
 use chrono::Utc;
 use clearing_solana::{ClearingState, Obligation, ObligationPool, ObligationStatus};
@@ -98,26 +99,85 @@ pub struct WorkerState {
     pub session_interval_time: u64,
     pub session_id: u64,
     pub last_clearing_operational_day: i64,
+    pub operational_day: i64,
+    pub fee_rate_bps: u64,
     pub solana_client: Arc<RpcClient>,
     pub db_pool: PgPool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SystemConfigSnapshot {
+    total_sessions: u64,
+    session_interval_time: u64,
+    last_clearing_operational_day: i64,
+    operational_day: i64,
+    fee_rate_bps: u64,
+}
+
+#[derive(sqlx::FromRow)]
+struct CachedSystemConfigRow {
+    total_sessions: i64,
+    session_interval_time: i64,
+    last_clearing_operational_day: i64,
+    operational_day: i64,
+    fee_rate_bps: i64,
+}
+
+impl SystemConfigSnapshot {
+    fn from_clearing_state(state: &ClearingState) -> Self {
+        Self {
+            total_sessions: state.total_sessions,
+            session_interval_time: state.session_interval_time,
+            last_clearing_operational_day: state.last_clearing_operational_day,
+            operational_day: state.operational_day,
+            fee_rate_bps: state.fee_rate_bps,
+        }
+    }
+
+    fn try_from_cached_row(row: CachedSystemConfigRow) -> anyhow::Result<Self> {
+        Ok(Self {
+            total_sessions: u64::try_from(row.total_sessions)
+                .context("cached total_sessions is negative")?,
+            session_interval_time: u64::try_from(row.session_interval_time)
+                .context("cached session_interval_time is negative")?,
+            last_clearing_operational_day: row.last_clearing_operational_day,
+            operational_day: row.operational_day,
+            fee_rate_bps: u64::try_from(row.fee_rate_bps)
+                .context("cached fee_rate_bps is negative")?,
+        })
+    }
 }
 
 impl WorkerState {
     pub async fn new(client: Arc<RpcClient>, db_pool: PgPool) -> anyhow::Result<Self> {
         let (pda, _bump) = clearing_solana::ClearingState::pda();
-
-        let clearing_state: ClearingState =
-            match get_account(&client, Pubkey::new_from_array(pda.to_bytes())).await {
-                Ok(res) => res,
-                Err(err) => {
-                    tracing::error!("{:?}", err);
-                    return Err(err);
+        let state_pda = Pubkey::new_from_array(pda.to_bytes());
+        let snapshot = match get_account::<ClearingState>(&client, state_pda).await {
+            Ok(clearing_state) => {
+                let snapshot = SystemConfigSnapshot::from_clearing_state(&clearing_state);
+                if let Err(err) = persist_system_config_cache(&db_pool, snapshot).await {
+                    tracing::warn!("failed to persist system config cache from on-chain state: {err:#}");
                 }
-            };
+                snapshot
+            }
+            Err(chain_err) => {
+                tracing::warn!(
+                    "failed to fetch on-chain clearing state at startup, trying DB cache: {chain_err:#}"
+                );
+                let cached = load_system_config_cache(&db_pool).await?;
+                tracing::info!(
+                    "worker started with cached system config: interval={} fee_rate_bps={} operational_day={}",
+                    cached.session_interval_time,
+                    cached.fee_rate_bps,
+                    cached.operational_day
+                );
+                cached
+            }
+        };
 
         Ok(Self {
             last_session_result: NettingSessionResult {
-                session_id: clearing_state.total_sessions,
+                session_id: snapshot.total_sessions,
                 result_id: "init".to_string(),
                 hash: String::new(),
                 solver_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -140,9 +200,11 @@ impl WorkerState {
                 timestamp: chrono::Utc::now().timestamp(),
                 settlement_operational_day: 0,
             },
-            session_interval_time: clearing_state.session_interval_time,
-            session_id: clearing_state.total_sessions,
-            last_clearing_operational_day: clearing_state.last_clearing_operational_day,
+            session_interval_time: snapshot.session_interval_time,
+            session_id: snapshot.total_sessions,
+            last_clearing_operational_day: snapshot.last_clearing_operational_day,
+            operational_day: snapshot.operational_day,
+            fee_rate_bps: snapshot.fee_rate_bps,
             solana_client: client,
             db_pool,
         })
@@ -217,9 +279,24 @@ impl Worker {
                         "Worker command received: IntervalUpdated(new_interval={}s)",
                         new_interval
                     );
-                    let mut s = self.state.write().await;
-                    s.session_interval_time = new_interval;
-                    tracing::info!("Worker session interval updated to {}s", new_interval);
+                    let (snapshot, db_pool) = {
+                        let mut s = self.state.write().await;
+                        s.session_interval_time = new_interval;
+                        tracing::info!("Worker session interval updated to {}s", new_interval);
+                        (
+                            SystemConfigSnapshot {
+                                total_sessions: s.session_id,
+                                session_interval_time: s.session_interval_time,
+                                last_clearing_operational_day: s.last_clearing_operational_day,
+                                operational_day: s.operational_day,
+                                fee_rate_bps: s.fee_rate_bps,
+                            },
+                            s.db_pool.clone(),
+                        )
+                    };
+                    if let Err(err) = persist_system_config_cache(&db_pool, snapshot).await {
+                        tracing::warn!("failed to update cached system config: {err:#}");
+                    }
                 }
                 None => break,
             }
@@ -530,11 +607,25 @@ impl Worker {
         .execute(&db_pool)
         .await?;
 
-        {
+        let (snapshot, db_pool) = {
             let mut s = self.state.write().await;
             s.last_session_result = session_result;
             s.session_id = next_session_id;
             s.last_clearing_operational_day = closed_operational_day;
+            s.operational_day = operational_day;
+            (
+                SystemConfigSnapshot {
+                    total_sessions: s.session_id,
+                    session_interval_time: s.session_interval_time,
+                    last_clearing_operational_day: s.last_clearing_operational_day,
+                    operational_day: s.operational_day,
+                    fee_rate_bps: s.fee_rate_bps,
+                },
+                s.db_pool.clone(),
+            )
+        };
+        if let Err(err) = persist_system_config_cache(&db_pool, snapshot).await {
+            tracing::warn!("failed to persist system config cache after clearing: {err:#}");
         }
 
         tracing::info!(
@@ -759,6 +850,83 @@ impl Worker {
         }
 
         all_obligations
+    }
+}
+
+async fn persist_system_config_cache(
+    db_pool: &PgPool,
+    snapshot: SystemConfigSnapshot,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO system_config_cache (
+            id, total_sessions, session_interval_time, last_clearing_operational_day,
+            operational_day, fee_rate_bps, updated_at
+        )
+        VALUES (TRUE, $1, $2, $3, $4, $5, EXTRACT(EPOCH FROM NOW())::BIGINT)
+        ON CONFLICT (id) DO UPDATE SET
+            total_sessions = EXCLUDED.total_sessions,
+            session_interval_time = EXCLUDED.session_interval_time,
+            last_clearing_operational_day = EXCLUDED.last_clearing_operational_day,
+            operational_day = EXCLUDED.operational_day,
+            fee_rate_bps = EXCLUDED.fee_rate_bps,
+            updated_at = EXCLUDED.updated_at
+        "#,
+    )
+    .bind(i64::try_from(snapshot.total_sessions).unwrap_or(i64::MAX))
+    .bind(i64::try_from(snapshot.session_interval_time).unwrap_or(i64::MAX))
+    .bind(snapshot.last_clearing_operational_day)
+    .bind(snapshot.operational_day)
+    .bind(i64::try_from(snapshot.fee_rate_bps).unwrap_or(i64::MAX))
+    .execute(db_pool)
+    .await
+    .context("failed to persist system_config_cache row")?;
+    Ok(())
+}
+
+async fn load_system_config_cache(db_pool: &PgPool) -> anyhow::Result<SystemConfigSnapshot> {
+    let row = sqlx::query_as::<_, CachedSystemConfigRow>(
+        r#"
+        SELECT
+            total_sessions,
+            session_interval_time,
+            last_clearing_operational_day,
+            operational_day,
+            fee_rate_bps
+        FROM system_config_cache
+        WHERE id = TRUE
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(db_pool)
+    .await
+    .context("failed to read system_config_cache")?
+    .context("system config cache is empty")?;
+
+    SystemConfigSnapshot::try_from_cached_row(row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CachedSystemConfigRow, SystemConfigSnapshot};
+
+    #[test]
+    fn cached_row_maps_to_snapshot() {
+        let row = CachedSystemConfigRow {
+            total_sessions: 12,
+            session_interval_time: 86_400,
+            last_clearing_operational_day: 1_700_000_000,
+            operational_day: 1_700_086_400,
+            fee_rate_bps: 250,
+        };
+
+        let snapshot = SystemConfigSnapshot::try_from_cached_row(row)
+            .expect("cached config row should map to snapshot");
+        assert_eq!(snapshot.total_sessions, 12);
+        assert_eq!(snapshot.session_interval_time, 86_400);
+        assert_eq!(snapshot.last_clearing_operational_day, 1_700_000_000);
+        assert_eq!(snapshot.operational_day, 1_700_086_400);
+        assert_eq!(snapshot.fee_rate_bps, 250);
     }
 }
 
