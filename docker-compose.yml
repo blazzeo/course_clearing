@@ -52,8 +52,9 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_API_URL: /api
-        VITE_SOLANA_RPC_URL: /solana
+        VITE_API_URL: https://clearme.local/api
+        VITE_SOLANA_RPC_URL: https://clearme.local/solana
+        VITE_SOLANA_WS_URL: wss://clearme.local/solana-ws
     container_name: gateway
     ports:
       - "443:443"

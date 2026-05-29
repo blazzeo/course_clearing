@@ -1070,7 +1070,7 @@ export default function AdminPanel() {
                                             fontWeight: 'bold'
                                         }}
                                     >
-                                        {actionLoading ? 'Проверка last result...' : 'Получить last session result'}
+                                        {actionLoading ? 'Проверка last result...' : 'Получить результат последней сессии'}
                                     </button>
                                 </div>
                             </div>
