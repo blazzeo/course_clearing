@@ -195,7 +195,7 @@ export default function Layout({ children, userType, onRoleUpdate }: LayoutProps
                                         fontWeight: location.pathname === '/admin' ? '600' : '400'
                                     }}
                                 >
-                                    Админ панель
+                                    Панель
                                 </Link>
                                 <Link
                                     to="/admin/obligations"
