@@ -20,5 +20,3 @@ COPY --from=builder /app/api/target/release/clearing-api /app/clearing-api
 
 EXPOSE 3001
 CMD ["./clearing-api"]
-
-

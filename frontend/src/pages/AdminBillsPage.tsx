@@ -4,16 +4,11 @@ import { toast } from "react-toastify";
 import { getAllBills, listClearingSessions, useProgram } from "../api";
 import { Bill } from "../interfaces";
 import { API_URL } from "../main";
+import { billNetPositionStatusToRu } from "../statusLabels";
 
 function csvEscape(value: string | number | null | undefined): string {
     const s = value == null ? "" : String(value);
     return `"${s.replace(/"/g, "\"\"")}"`;
-}
-
-function billStatusLabel(status: number): string {
-    if (status === 2) return "Оплачено";
-    if (status === 1) return "Комиссия оплачена";
-    return "Ожидает оплаты";
 }
 
 export default function AdminBillsPage() {
@@ -100,7 +95,7 @@ export default function AdminBillsPage() {
             s.net_amount,
             s.fee_amount,
             s.status,
-            billStatusLabel(s.status),
+            billNetPositionStatusToRu(s.status),
         ]);
         const csv = [headers, ...rows]
             .map((row) => row.map((x) => csvEscape(x as string | number | null | undefined)).join(","))
@@ -137,7 +132,7 @@ export default function AdminBillsPage() {
                     <option value={-1}>Все статусы</option>
                     <option value={0}>Ожидает оплаты</option>
                     <option value={1}>Комиссия оплачена</option>
-                    <option value={2}>Оплачено</option>
+                    <option value={2}>Погашено</option>
                 </select>
                 <input type="date" className="input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
                 <input type="date" className="input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
@@ -168,7 +163,7 @@ export default function AdminBillsPage() {
                                     <td><Link to={`/participant/${s.creditor.toBase58()}`}>{s.creditor.toBase58().slice(0, 8)}...</Link></td>
                                     <td>{(s.net_amount / 1e9).toFixed(4)} SOL</td>
                                     <td>{(s.fee_amount / 1e9).toFixed(4)} SOL</td>
-                                    <td>{billStatusLabel(s.status)}</td>
+                                    <td>{billNetPositionStatusToRu(s.status)}</td>
                                 </tr>
                             ))}
                         </tbody>

@@ -21,6 +21,7 @@ async fn main() -> std::io::Result<()> {
         .init();
 
     let config = config::parse_env();
+    dbg!(&config);
 
     dbg!(&config);
 
